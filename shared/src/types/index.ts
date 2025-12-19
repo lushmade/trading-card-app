@@ -25,7 +25,7 @@ export type CardDesign = {
   id: string;
   templateId?: string;
   type?: string;
-  teamId?: string;
+  teamName?: string;
   position?: string;
   jerseyNumber?: string;
   firstName?: string;

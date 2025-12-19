@@ -22,6 +22,22 @@ export default $config({
       },
     });
 
+    new aws.s3.BucketLifecycleConfigurationV2("MediaUploadsLifecycle", {
+      bucket: mediaBucket.name,
+      rules: [
+        {
+          id: "expire-uploads",
+          status: "Enabled",
+          filter: {
+            prefix: "uploads/",
+          },
+          expiration: {
+            days: 14,
+          },
+        },
+      ],
+    });
+
     const cardsTable = new sst.aws.Dynamo("Cards", {
       fields: {
         id: "string",

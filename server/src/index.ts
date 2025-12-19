@@ -1,10 +1,10 @@
 import { Hono } from 'hono'
 import { Resource } from 'sst'
 import { randomUUID } from 'node:crypto'
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb'
-import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb'
+import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
+import { S3Client } from '@aws-sdk/client-s3'
+import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb'
+import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb'
 import type { ApiResponse, CardDesign, CardStatus, CropRect } from 'shared'
 
 const app = new Hono()
@@ -110,6 +110,20 @@ const pickPhoto = (value: unknown): CardDesign['photo'] | undefined => {
   return Object.keys(photo).length > 0 ? photo : undefined
 }
 
+const validatePhotoKeys = (cardId: string, photo?: CardDesign['photo']) => {
+  if (!photo) return null
+
+  if (photo.originalKey && !photo.originalKey.startsWith(`uploads/original/${cardId}/`)) {
+    return 'originalKey must belong to this card'
+  }
+
+  if (photo.cropKey && !photo.cropKey.startsWith(`uploads/crop/${cardId}/`)) {
+    return 'cropKey must belong to this card'
+  }
+
+  return null
+}
+
 const pickCardInput = (
   input: Record<string, unknown>,
   options?: { allowStatus?: boolean }
@@ -118,7 +132,7 @@ const pickCardInput = (
 
   if (typeof input.templateId === 'string') data.templateId = input.templateId
   if (typeof input.type === 'string') data.type = input.type
-  if (typeof input.teamId === 'string') data.teamId = input.teamId
+  if (typeof input.teamName === 'string') data.teamName = input.teamName
   if (typeof input.position === 'string') data.position = input.position
   if (typeof input.jerseyNumber === 'string') data.jerseyNumber = input.jerseyNumber
   if (typeof input.firstName === 'string') data.firstName = input.firstName
@@ -248,21 +262,26 @@ app.post('/uploads/presign', async (c) => {
     return badRequest(c, 'Unsupported contentType for this upload kind')
   }
 
-  const command = new PutObjectCommand({
+  const { url, fields } = await createPresignedPost(s3, {
     Bucket: Resource.Media.name,
     Key: key,
-    ContentType: contentType,
+    Fields: {
+      'Content-Type': contentType,
+    },
+    Conditions: [
+      ['content-length-range', 1, MAX_UPLOAD_BYTES],
+      ['eq', '$Content-Type', contentType],
+    ],
+    Expires: 900,
   })
-
-  const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 900 })
   const publicUrl = getPublicPath(key)
 
   return c.json({
-    uploadUrl,
+    uploadUrl: url,
     key,
     publicUrl,
-    method: 'PUT',
-    headers: { 'Content-Type': contentType },
+    method: 'POST',
+    fields,
   })
 })
 
@@ -279,6 +298,11 @@ app.post('/cards', async (c) => {
     createdAt: now,
     updatedAt: now,
     ...pickCardInput(body),
+  }
+
+  const createPhotoKeyError = validatePhotoKeys(id, record.photo)
+  if (createPhotoKeyError) {
+    return badRequest(c, createPhotoKeyError)
   }
 
   await ddb.send(
@@ -326,6 +350,10 @@ app.patch('/cards/:id', async (c) => {
   if (!isRecord(body)) return badRequest(c, 'Invalid request body')
 
   const updates = pickCardInput(body)
+  const photoKeyError = validatePhotoKeys(id, updates.photo)
+  if (photoKeyError) {
+    return badRequest(c, photoKeyError)
+  }
   const now = nowIso()
 
   const next: CardDesign = {
@@ -361,9 +389,9 @@ app.post('/cards/:id/submit', async (c) => {
 
   const card = existing.Item as CardDesign
 
-  // Enforce status transition: only draft can be submitted
+  // Enforce status transition: only draft can be submitted (idempotent return)
   if (card.status !== 'draft') {
-    return badRequest(c, `Card is already ${card.status}`)
+    return c.json(card)
   }
 
   const body = await getJsonBody(c)
@@ -383,21 +411,56 @@ app.post('/cards/:id/submit', async (c) => {
   }
 
   const now = nowIso()
-  const next: CardDesign = {
-    ...card,
-    renderKey,
-    status: 'submitted',
-    updatedAt: now,
+  try {
+    const result = await ddb.send(
+      new UpdateCommand({
+        TableName: Resource.Cards.name,
+        Key: { id },
+        UpdateExpression: 'SET #renderKey = :renderKey, #status = :status, #updatedAt = :updatedAt',
+        ConditionExpression: '#status = :draft',
+        ExpressionAttributeNames: {
+          '#renderKey': 'renderKey',
+          '#status': 'status',
+          '#updatedAt': 'updatedAt',
+        },
+        ExpressionAttributeValues: {
+          ':renderKey': renderKey,
+          ':status': 'submitted',
+          ':draft': 'draft',
+          ':updatedAt': now,
+        },
+        ReturnValues: 'ALL_NEW',
+      })
+    )
+
+    if (result.Attributes) {
+      return c.json(result.Attributes)
+    }
+
+    const next: CardDesign = {
+      ...card,
+      renderKey,
+      status: 'submitted',
+      updatedAt: now,
+    }
+    return c.json(next)
+  } catch (err) {
+    if (err instanceof ConditionalCheckFailedException || (isRecord(err) && err.name === 'ConditionalCheckFailedException')) {
+      const latest = await ddb.send(
+        new GetCommand({
+          TableName: Resource.Cards.name,
+          Key: { id },
+        })
+      )
+
+      if (latest.Item) {
+        return c.json(latest.Item)
+      }
+
+      return c.json({ error: 'Card not found' }, 404)
+    }
+    throw err
   }
-
-  await ddb.send(
-    new PutCommand({
-      TableName: Resource.Cards.name,
-      Item: next,
-    })
-  )
-
-  return c.json(next)
 })
 
 app.notFound((c) => c.json({ error: 'Not Found' }, 404))

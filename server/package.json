@@ -7,12 +7,14 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/dev.ts",
+    "type-check": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint ."
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.955.0",
     "@aws-sdk/client-s3": "^3.955.0",
     "@aws-sdk/lib-dynamodb": "^3.955.0",
+    "@aws-sdk/s3-presigned-post": "^3.955.0",
     "@aws-sdk/s3-request-presigner": "^3.955.0",
     "@hono/node-server": "^1.13.1",
     "hono": "^4.10.8",

@@ -1,5 +1,8 @@
 import { CARD_WIDTH, CARD_HEIGHT, type CropRect } from 'shared'
 
+const FONT_SANS = '"Sora", "Avenir Next", "Helvetica Neue", system-ui, sans-serif'
+const FONT_DISPLAY = '"Fraunces", "Iowan Old Style", serif'
+
 export type RenderCardInput = {
   imageUrl: string
   crop: CropRect
@@ -60,11 +63,50 @@ function drawCroppedImage(
   ctx.restore()
 }
 
+function fillTextWithLetterSpacing(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  spacingPx: number
+) {
+  let cursor = x
+  for (const ch of text) {
+    ctx.fillText(ch, cursor, y)
+    cursor += ctx.measureText(ch).width + spacingPx
+  }
+}
+
+function fitText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  initialSize: number,
+  minSize: number,
+  fontFamily: string,
+  fontWeight = 'bold'
+) {
+  let size = initialSize
+  while (size > minSize) {
+    ctx.font = `${fontWeight} ${size}px ${fontFamily}`
+    if (ctx.measureText(text).width <= maxWidth) {
+      return size
+    }
+    size -= 2
+  }
+  ctx.font = `${fontWeight} ${minSize}px ${fontFamily}`
+  return minSize
+}
+
 /**
  * Render a trading card to a canvas and return as PNG blob
  */
 export async function renderCard(input: RenderCardInput): Promise<Blob> {
   const { imageUrl, crop, firstName, lastName, position, team, jerseyNumber, photographer } = input
+
+  if (document.fonts?.ready) {
+    await document.fonts.ready
+  }
 
   const canvas = document.createElement('canvas')
   canvas.width = CARD_WIDTH
@@ -76,6 +118,8 @@ export async function renderCard(input: RenderCardInput): Promise<Blob> {
   }
 
   // Load and draw the player photo full-bleed
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
   const img = await loadImage(imageUrl)
   drawCroppedImage(ctx, img, crop, 0, 0, CARD_WIDTH, CARD_HEIGHT)
 
@@ -97,15 +141,14 @@ export async function renderCard(input: RenderCardInput): Promise<Blob> {
   ctx.strokeRect(30, 30, CARD_WIDTH - 60, CARD_HEIGHT - 60)
 
   // Top badge/label
-  ctx.font = '14px system-ui, sans-serif'
+  ctx.font = `14px ${FONT_SANS}`
   ctx.fillStyle = 'rgba(255, 255, 255, 0.6)'
   ctx.textAlign = 'left'
-  ctx.letterSpacing = '3px'
-  ctx.fillText('TRADING CARD', 50, 45)
+  fillTextWithLetterSpacing(ctx, 'TRADING CARD', 50, 45, 3)
 
   // Jersey number (large watermark, top right)
   if (jerseyNumber) {
-    ctx.font = 'bold 140px system-ui, sans-serif'
+    ctx.font = `bold 140px ${FONT_SANS}`
     ctx.fillStyle = 'rgba(255, 255, 255, 0.12)'
     ctx.textAlign = 'right'
     ctx.fillText(jerseyNumber, CARD_WIDTH - 40, 150)
@@ -113,27 +156,29 @@ export async function renderCard(input: RenderCardInput): Promise<Blob> {
 
   // Player name (bottom area, over gradient)
   const fullName = `${firstName} ${lastName}`.trim()
-  ctx.font = 'bold 56px system-ui, sans-serif'
+  const nameText = fullName || 'Player Name'
+  const nameFontSize = fitText(ctx, nameText, CARD_WIDTH - 100, 56, 34, FONT_DISPLAY)
   ctx.fillStyle = '#ffffff'
   ctx.textAlign = 'left'
-  ctx.fillText(fullName || 'Player Name', 50, CARD_HEIGHT - 180)
+  ctx.font = `bold ${nameFontSize}px ${FONT_DISPLAY}`
+  ctx.fillText(nameText, 50, CARD_HEIGHT - 180)
 
   // Position and team
   const positionTeam = [position, team].filter(Boolean).join(' / ')
-  ctx.font = '28px system-ui, sans-serif'
+  ctx.font = `28px ${FONT_SANS}`
   ctx.fillStyle = 'rgba(255, 255, 255, 0.8)'
   ctx.fillText(positionTeam || 'Position / Team', 50, CARD_HEIGHT - 130)
 
   // Jersey number (small, below position)
   if (jerseyNumber) {
-    ctx.font = 'bold 36px system-ui, sans-serif'
+    ctx.font = `bold 36px ${FONT_SANS}`
     ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'
     ctx.fillText(`#${jerseyNumber}`, 50, CARD_HEIGHT - 80)
   }
 
   // Photographer credit (bottom right)
   if (photographer) {
-    ctx.font = '18px system-ui, sans-serif'
+    ctx.font = `18px ${FONT_SANS}`
     ctx.fillStyle = 'rgba(255, 255, 255, 0.5)'
     ctx.textAlign = 'right'
     ctx.fillText(`Photo: ${photographer}`, CARD_WIDTH - 50, CARD_HEIGHT - 40)
