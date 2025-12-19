@@ -1,0 +1,38 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&family=Sora:wght@300..700&display=swap');
+@import "tailwindcss";
+
+:root {
+  --font-sans: "Sora", "Avenir Next", "Helvetica Neue", sans-serif;
+  --font-display: "Fraunces", "Iowan Old Style", serif;
+  --ink: #eef2ff;
+  --muted: #94a3b8;
+  --panel: rgba(255, 255, 255, 0.06);
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--ink);
+  background-color: #0b0f1a;
+}
+
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+.app-shell {
+  background:
+    radial-gradient(60rem 60rem at -10% -15%, rgba(94, 234, 212, 0.2), transparent 55%),
+    radial-gradient(45rem 45rem at 110% 10%, rgba(248, 113, 113, 0.18), transparent 55%),
+    radial-gradient(35rem 35rem at 50% 120%, rgba(129, 140, 248, 0.2), transparent 60%),
+    linear-gradient(135deg, rgba(15, 23, 42, 0.85), rgba(2, 6, 23, 0.95));
+}
+
+.cropper-container {
+  border-radius: 1.5rem;
+}
+
+.cropper-area {
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  box-shadow: 0 0 0 9999px rgba(2, 6, 23, 0.7);
+}
