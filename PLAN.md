@@ -49,14 +49,17 @@
 
 ### Security ✅
 - PATCH endpoint cannot set `status` or `renderKey` (server-controlled)
-- Presigned uploads with content-type validation
+- Presigned uploads with content-type + size validation (POST policy)
 - Max upload size: 15MB
 - Allowed types: JPEG, PNG, WebP (renders must be PNG)
 
 ### API/Server Hardening ✅
 - Presign requires card exists - Verifies card ID before issuing presigned URL
 - Submit requires renderKey - Rejects if `renderKey` missing or doesn't match `renders/${id}/...png`
-- Enforce status transitions - Only allows `draft → submitted`
+- Enforce status transitions - Only allows `draft → submitted` (idempotent submit)
+- Conditional submit write - Uses DynamoDB condition on `status = draft`
+- Validate upload keys belong to card - Reject cross-card key updates
+- Presigned POST upload policy - Enforces size/type via POST conditions
 - Server-side crop validation - Clamps crop values to valid ranges
 
 ### Developer Experience ✅
@@ -92,33 +95,56 @@ Now gates on `import.meta.env.DEV` so production uses relative `/api` and media 
 
 Changed to `allowOrigins: ["*"]` since bucket is private and only accessible via short-lived presigned URLs.
 
+### 6. Canvas letterSpacing breaks TS builds ✅ FIXED
+**File:** `client/src/renderCard.ts`
+
+Replaced `ctx.letterSpacing` with a manual letter-spacing helper.
+
+### 7. type-check hook was a no-op ✅ FIXED
+**Files:** `client/package.json`, `server/package.json`, `shared/package.json`
+
+Added per-package `type-check` scripts so Turbo runs TypeScript checks.
+
+### 8. Submit enabled without crop ✅ FIXED
+**File:** `client/src/App.tsx`
+
+Submit now requires required fields, a photo, and a valid crop; inline validation added.
+
 ---
 
 ## Next Steps (Phase 4+)
 
-### Hardening (Remaining)
+### Hardening
 - [ ] Error handling - Better error messages, retry logic for failed uploads
-- [ ] Form validation - Required fields, jersey number format, name length limits
+- [x] Basic form validation - Required fields + file size/type checks
+- [ ] Form validation - Jersey number format, name length limits
 - [ ] Loading states - Skeleton loaders, progress indicators during render
-- [ ] S3 lifecycle rules - Auto-delete orphaned uploads after X days
-- [ ] Submit requires complete card - Enforce `photo.originalKey` + dimensions + crop before allowing submit
-- [ ] Presigned POST for strict size enforcement - Current presigned PUT allows client to lie about `contentLength`
+- [x] S3 lifecycle rules - Auto-delete orphaned uploads after 14 days
+- [x] Submit requires complete card - Client gating for photo + crop (auto-saves on submit)
+- [ ] Server-side submit completeness validation - Enforce `photo.originalKey` + dimensions + crop before allowing submit
+- [x] Presigned POST for strict size enforcement - Enforces size/type via POST policy
+- [x] Validate upload keys belong to card - Reject cross-card key updates
+- [x] Conditional submit writes - Idempotent submit with DynamoDB condition
 
 ### Code Cleanup
-- [ ] Merge duplicate presign functions - `requestPresign` and `requestPresignForBlob` can be unified
-- [ ] Align naming - `team` vs `teamId` is confusing; pick one (or store both if ID + display name needed)
-- [ ] Keep cropper on local URL - Don't switch from local blob → CloudFront URL after upload (avoids CORS flicker)
-- [ ] Disable Submit unless crop exists - Button enabled without `normalizedCrop` causes confusing errors
-- [ ] Font loading for canvas - Add `await document.fonts.ready` before rendering if using custom fonts
-- [ ] Canvas image quality - Set `ctx.imageSmoothingEnabled = true` and `ctx.imageSmoothingQuality = 'high'`
+- [x] Merge duplicate presign functions - `requestPresignFor` now handles File/Blob
+- [x] Align naming - `teamName` replaces `teamId`
+- [x] Keep cropper on local URL - Avoids CORS flicker mid-session
+- [x] Disable Submit unless crop exists - Gated on required fields, photo, and crop
+- [x] Font loading for canvas - Uses `document.fonts.ready` before render
+- [x] Canvas image quality - `imageSmoothingEnabled` + `imageSmoothingQuality = 'high'`
+- [x] Handle long names - Shrink-to-fit text sizing in render
 
 ### UX Upgrades
 - [ ] Photo upload prominence - Larger drop zone, drag-and-drop support, clearer empty state
 - [ ] Live card preview - Show real-time preview of final card layout (not just crop), reuse `renderCard` logic
 - [ ] Button state feedback - Show "Saving..." / "Creating..." on buttons during mutations, not just status text
-- [ ] Submit enablement hint - Add helper text "Upload a photo to enable submission" when Submit is disabled
+- [x] Submit enablement hint - Helper text when required fields are missing
 - [ ] Status consolidation - Single status indicator instead of multiple inline messages
-- [ ] Field validation UI - Inline error messages, required field indicators, jersey number format hint
+- [x] Field validation UI - Inline error messages + required field indicators
+- [ ] Jersey number format hint - Add a format helper for jersey numbers
+- [x] Rendered card panel - Move rendered preview to top of right column
+- [x] Submit flow clarity - Auto-save draft on submit
 - [ ] Page title - Change from "BHVR" to "Trading Card Studio"
 - [ ] Upload progress - Show progress bar during photo upload (especially for large files)
 - [ ] Success celebration - Brief animation or visual feedback when card is submitted successfully
@@ -131,7 +157,7 @@ Changed to `allowOrigins: ["*"]` since bucket is private and only accessible via
 
 ### Polish
 - [ ] Card templates - Different designs/themes
-- [ ] Font loading - Custom fonts for card text (currently system-ui)
+- [x] Font loading - Custom fonts for card text (Sora/Fraunces)
 - [ ] Image optimization - Resize before upload, WebP support
 - [ ] Mobile UX - Touch-friendly cropping
 
@@ -190,7 +216,7 @@ Changed to `allowOrigins: ["*"]` since bucket is private and only accessible via
 - **S3**
   - `media` bucket (private, CloudFront access only)
   - `uploads/` and `renders/` prefixes
-  - lifecycle for `uploads/` (expire after N days) - TODO
+  - lifecycle for `uploads/` (expire after 14 days)
   - CORS for direct browser uploads (prod origin + localhost for dev)
 - **DynamoDB**
   - table `Cards` for draft/submitted metadata
@@ -204,7 +230,7 @@ Changed to `allowOrigins: ["*"]` since bucket is private and only accessible via
 
 ## Data Model (in `shared/`)
 - `CardDesign`
-  - `id`, `templateId`, `type`, `teamId`, `position`, `jerseyNumber`, `firstName`, `lastName`, `photographer`
+  - `id`, `templateId`, `type`, `teamName`, `position`, `jerseyNumber`, `firstName`, `lastName`, `photographer`
   - `photo`:
     - `originalKey`, `width`, `height`
     - `crop`: `x`, `y`, `w`, `h` (normalized 0..1), `rotateDeg` (0/90/180/270)
@@ -216,14 +242,14 @@ Changed to `allowOrigins: ["*"]` since bucket is private and only accessible via
 - `POST /api/uploads/presign`
   - input: `{ cardId, contentType, contentLength, kind: "original" | "crop" | "render" }`
   - validates size + content type (jpeg/png/webp, render must be png)
-  - output: `{ uploadUrl, key, publicUrl, method }`
+  - output: `{ uploadUrl, key, publicUrl, method, fields }` (POST policy for direct S3 uploads)
 - `POST /api/cards` – create draft
 - `GET /api/cards/:id` – fetch draft
 - `PATCH /api/cards/:id` – update draft + crop metadata
 - `POST /api/cards/:id/submit` – mark submitted with `renderKey`
 
 ## Upload & Render Flow
-1. Client creates draft → gets card ID
+1. Client creates draft (or submit auto-creates) → gets card ID
 2. Client requests presign for original upload (`kind=original`)
 3. Client uploads to S3 directly, stores `originalKey` in draft via PATCH
 4. Client stores crop metadata (and optionally uploads cropped derivative)
@@ -234,21 +260,23 @@ Changed to `allowOrigins: ["*"]` since bucket is private and only accessible via
 
 ## Canvas Render Details (`renderCard.ts`)
 - Card dimensions: 825x1125 pixels
-- Full-bleed image covering entire card
+- Full-bleed image covering entire card (high-quality smoothing)
 - Gradient overlay at bottom (350px) for text readability
 - Text elements:
   - "TRADING CARD" label (top left)
   - Jersey number watermark (top right, semi-transparent)
-  - Player name (bottom, over gradient)
+  - Player name (bottom, over gradient, shrink-to-fit)
   - Position / Team (below name)
   - Jersey number badge (below position)
   - Photo credit (bottom right)
 - Border decorations (subtle white lines)
+- Fonts: Sora (sans) + Fraunces (display)
 
 ## Crop UX Details
 - `react-easy-crop` with drag/pinch/scroll for crop and zoom
 - Controls: Zoom In, Zoom Out, Reset (rotation disabled for v1)
 - Crop rectangle stored as normalized coordinates (0..1)
+- Default crop initializes on media load
 - Card aspect ratio: 825:1125 (approx 0.73:1)
 - Shared constants in `shared/src/constants.ts` (CARD_WIDTH, CARD_HEIGHT, CARD_ASPECT)
 
@@ -284,14 +312,14 @@ Changed to `allowOrigins: ["*"]` since bucket is private and only accessible via
 5. **Phase 3b: Critical Bug Fixes** ✅
 6. **Phase 4: API/Server Hardening** ✅
 7. **Phase 4b: Developer Experience** ✅ (eslint, pre-commit hooks)
-8. **Phase 5: Remaining Hardening** ⚠️ **← Current Priority** (error handling, form validation, loading states)
+8. **Phase 5: Remaining Hardening** ⚠️ **← Current Priority** (error handling, validation polish, loading states)
 9. **Phase 6: UX Upgrades** - Planned
 10. **Phase 7: Admin/Management** - Planned
 11. **Phase 8: Polish** - Planned
 12. **Phase 9: Production** - Planned
 
 ## Open Questions
-- Retention period for `uploads/` and `renders/`?
+- Retention period for `renders/`? (`uploads/` expires after 14 days)
 - Store cropped derivative, or only original + crop metadata? (Currently: original only)
 - Any admin interface required in v1?
 - Custom fonts for card rendering?
