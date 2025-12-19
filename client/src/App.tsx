@@ -1175,7 +1175,7 @@ function App() {
           </p>
           <div className="space-y-2">
             <h1 className="font-display text-4xl text-white md:text-5xl">
-              Build your card from a single crop
+              Build and submit your trading card
             </h1>
             <p className="max-w-2xl text-base text-slate-300">
               Upload a photo, drag to frame the shot, and submit when it looks right.
