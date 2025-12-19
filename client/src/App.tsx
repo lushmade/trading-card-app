@@ -21,6 +21,10 @@ const media = (path: string) => `${MEDIA_BASE}${path}`
 
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 const ALLOWED_UPLOAD_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const MAX_NAME_LENGTH = 24
+const MAX_JERSEY_LENGTH = 3
+const JERSEY_PATTERN = /^\d{1,3}$/
+const MAX_UPLOAD_RETRIES = 1
 
 type FormState = {
   cardType: string
@@ -73,6 +77,11 @@ type PresignResponse = {
   fields?: Record<string, string>
 }
 
+type UploadProgress = {
+  kind: 'original' | 'render'
+  percent: number
+}
+
 const initialForm: FormState = {
   cardType: '',
   team: '',
@@ -85,6 +94,11 @@ const initialForm: FormState = {
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max)
+
+const toOptional = (value: string) => {
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
 
 const buildDefaultCrop = (size: MediaSize, rotateDeg: Rotation): CropRect => {
   const imageAspect = size.naturalWidth / size.naturalHeight
@@ -181,39 +195,75 @@ const toUploadFile = (data: Blob, key: string) =>
         type: data.type || 'application/octet-stream',
       })
 
-async function uploadToS3(presign: PresignResponse, data: Blob): Promise<void> {
-  if (presign.method === 'POST') {
-    if (!presign.fields) {
-      throw new Error('Upload fields are missing')
-    }
+async function uploadToS3(
+  presign: PresignResponse,
+  data: Blob,
+  onProgress?: (percent: number) => void
+): Promise<void> {
+  const uploadOnce = () =>
+    new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open(presign.method, presign.uploadUrl)
 
-    const formData = new FormData()
-    for (const [key, value] of Object.entries(presign.fields)) {
-      formData.append(key, value)
-    }
-    formData.append('file', toUploadFile(data, presign.key))
+      if (presign.method !== 'POST' && presign.headers) {
+        for (const [key, value] of Object.entries(presign.headers)) {
+          xhr.setRequestHeader(key, value)
+        }
+      }
 
-    const res = await fetch(presign.uploadUrl, {
-      method: 'POST',
-      body: formData,
+      if (xhr.upload && onProgress) {
+        xhr.upload.onprogress = (event) => {
+          const total = event.total || data.size
+          if (!total) return
+          const percent = Math.round((event.loaded / total) * 100)
+          onProgress(Math.min(100, Math.max(0, percent)))
+        }
+      }
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          onProgress?.(100)
+          resolve()
+        } else {
+          reject(new Error('Upload failed'))
+        }
+      }
+      xhr.onerror = () => reject(new Error('Upload failed'))
+      xhr.onabort = () => reject(new Error('Upload aborted'))
+
+      if (presign.method === 'POST') {
+        if (!presign.fields) {
+          reject(new Error('Upload fields are missing'))
+          return
+        }
+
+        const formData = new FormData()
+        for (const [key, value] of Object.entries(presign.fields)) {
+          formData.append(key, value)
+        }
+        formData.append('file', toUploadFile(data, presign.key))
+        xhr.send(formData)
+        return
+      }
+
+      xhr.send(data)
     })
 
-    if (!res.ok) {
-      throw new Error('Upload failed')
+  let lastError: unknown = null
+  for (let attempt = 0; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
+    try {
+      await uploadOnce()
+      return
+    } catch (err) {
+      lastError = err
+      if (attempt < MAX_UPLOAD_RETRIES) {
+        onProgress?.(0)
+      }
     }
-
-    return
   }
 
-  const res = await fetch(presign.uploadUrl, {
-    method: presign.method,
-    headers: presign.headers,
-    body: data,
-  })
-
-  if (!res.ok) {
-    throw new Error('Upload failed')
-  }
+  if (lastError instanceof Error) throw lastError
+  throw new Error('Upload failed')
 }
 
 async function submitCard(id: string, renderKey: string): Promise<CardDesign> {
@@ -261,6 +311,7 @@ function App() {
   const [cardId, setCardId] = useState<string | null>(null)
   const [savedCard, setSavedCard] = useState<CardDesign | null>(null)
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'uploaded' | 'error'>('idle')
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [photoError, setPhotoError] = useState<string | null>(null)
   const [renderedCardUrl, setRenderedCardUrl] = useState<string | null>(null)
@@ -274,13 +325,13 @@ function App() {
   })
 
   const buildPayload = (): SavePayload => ({
-    type: form.cardType || undefined,
-    teamName: form.team || undefined,
-    position: form.position || undefined,
-    jerseyNumber: form.jerseyNumber || undefined,
-    firstName: form.firstName || undefined,
-    lastName: form.lastName || undefined,
-    photographer: form.photographer || undefined,
+    type: toOptional(form.cardType),
+    teamName: toOptional(form.team),
+    position: toOptional(form.position),
+    jerseyNumber: toOptional(form.jerseyNumber),
+    firstName: toOptional(form.firstName),
+    lastName: toOptional(form.lastName),
+    photographer: toOptional(form.photographer),
   })
 
   const buildPhotoPayload = (
@@ -319,10 +370,13 @@ function App() {
     }
 
     setUploadStatus('uploading')
+    setUploadProgress({ kind: 'original', percent: 0 })
 
     try {
       const presign = await requestPresignFor(currentCardId, photo.file, 'original')
-      await uploadToS3(presign, photo.file)
+      await uploadToS3(presign, photo.file, (percent) =>
+        setUploadProgress({ kind: 'original', percent })
+      )
 
       const uploaded: UploadedPhoto = {
         key: presign.key,
@@ -333,27 +387,50 @@ function App() {
 
       setUploadedPhoto(uploaded)
       setUploadStatus('uploaded')
+      setUploadProgress(null)
       return uploaded
-    } catch (err) {
+    } catch {
       setUploadStatus('error')
-      throw err
+      setUploadProgress(null)
+      throw new Error('Photo upload failed. Please try again.')
     }
   }
 
   const hasPhoto = Boolean(photo || uploadedPhoto)
 
   const getValidationErrors = useCallback(() => {
-    const errors: Partial<Record<'firstName' | 'lastName' | 'team' | 'position' | 'photo' | 'crop', string>> = {}
+    const errors: Partial<Record<'firstName' | 'lastName' | 'team' | 'position' | 'photo' | 'crop' | 'jerseyNumber', string>> = {}
 
-    if (!form.firstName.trim()) errors.firstName = 'First name is required'
-    if (!form.lastName.trim()) errors.lastName = 'Last name is required'
-    if (!form.team.trim()) errors.team = 'Team is required'
-    if (!form.position.trim()) errors.position = 'Position is required'
+    const firstName = form.firstName.trim()
+    const lastName = form.lastName.trim()
+    const team = form.team.trim()
+    const position = form.position.trim()
+    const jerseyNumber = form.jerseyNumber.trim()
+
+    if (!firstName) {
+      errors.firstName = 'First name is required'
+    } else if (firstName.length > MAX_NAME_LENGTH) {
+      errors.firstName = `First name must be ${MAX_NAME_LENGTH} characters or fewer`
+    }
+
+    if (!lastName) {
+      errors.lastName = 'Last name is required'
+    } else if (lastName.length > MAX_NAME_LENGTH) {
+      errors.lastName = `Last name must be ${MAX_NAME_LENGTH} characters or fewer`
+    }
+
+    if (!team) errors.team = 'Team is required'
+    if (!position) errors.position = 'Position is required'
+
+    if (jerseyNumber && !JERSEY_PATTERN.test(jerseyNumber)) {
+      errors.jerseyNumber = 'Jersey number must be 1-3 digits'
+    }
+
     if (!hasPhoto) errors.photo = 'Photo is required'
     if (!normalizedCrop) errors.crop = 'Crop is required'
 
     return errors
-  }, [form.firstName, form.lastName, form.position, form.team, hasPhoto, normalizedCrop])
+  }, [form.firstName, form.lastName, form.position, form.team, form.jerseyNumber, hasPhoto, normalizedCrop])
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -427,21 +504,35 @@ function App() {
       // Step 1: Render the card
       setSubmitStatus('rendering')
       const imageUrl = photo?.localUrl ?? media(uploaded.publicUrl)
-      const blob = await renderCard({
-        imageUrl,
-        crop: normalizedCrop,
-        firstName: form.firstName,
-        lastName: form.lastName,
-        position: form.position,
-        team: form.team,
-        jerseyNumber: form.jerseyNumber,
-        photographer: form.photographer,
-      })
+      let blob: Blob
+      try {
+        blob = await renderCard({
+          imageUrl,
+          crop: normalizedCrop,
+          firstName: form.firstName.trim(),
+          lastName: form.lastName.trim(),
+          position: form.position.trim(),
+          team: form.team.trim(),
+          jerseyNumber: form.jerseyNumber.trim(),
+          photographer: form.photographer.trim(),
+        })
+      } catch {
+        throw new Error('Failed to render the card. Please try again.')
+      }
 
       // Step 2: Upload rendered PNG
       setSubmitStatus('uploading')
       const presign = await requestPresignFor(currentCardId, blob, 'render')
-      await uploadToS3(presign, blob)
+      setUploadProgress({ kind: 'render', percent: 0 })
+      try {
+        await uploadToS3(presign, blob, (percent) =>
+          setUploadProgress({ kind: 'render', percent })
+        )
+      } catch {
+        throw new Error('Render upload failed. Please try again.')
+      } finally {
+        setUploadProgress(null)
+      }
 
       // Step 3: Submit the card
       setSubmitStatus('submitting')
@@ -471,23 +562,67 @@ function App() {
       hasError ? 'border-rose-500/60' : 'border-white/10'
     } bg-slate-950/60 px-3 py-2 text-sm text-white`
 
-  const statusMessage = useMemo(() => {
-    if (saveMutation.isPending) {
-      if (uploadStatus === 'uploading') return 'Uploading photo...'
-      return 'Saving draft...'
-    }
-    if (saveMutation.isSuccess) return 'Draft saved'
-    return 'Draft not saved yet'
-  }, [saveMutation.isPending, saveMutation.isSuccess, uploadStatus])
+  const statusIndicator = useMemo(() => {
+    const errorMessage = error ?? (helloQuery.error instanceof Error ? helloQuery.error.message : null)
+    if (errorMessage) return { message: errorMessage, tone: 'error' as const }
 
-  const errorMessage = useMemo(() => {
-    const err = error ?? (helloQuery.error instanceof Error ? helloQuery.error.message : null)
-    return err
-  }, [error, helloQuery.error])
+    if (submitStatus === 'rendering') return { message: 'Rendering card...', tone: 'warning' as const }
+    if (submitStatus === 'uploading') return { message: 'Uploading render...', tone: 'warning' as const }
+    if (submitStatus === 'submitting') return { message: 'Submitting card...', tone: 'warning' as const }
+    if (submitStatus === 'done') return { message: 'Card submitted!', tone: 'success' as const }
+
+    if (saveMutation.isPending) {
+      if (uploadStatus === 'uploading') return { message: 'Uploading photo...', tone: 'warning' as const }
+      return { message: 'Saving draft...', tone: 'warning' as const }
+    }
+
+    if (saveMutation.isSuccess) return { message: 'Draft saved', tone: 'success' as const }
+    if (hasEdited && Object.keys(validationErrors).length > 0) {
+      return { message: 'Complete required fields to submit.', tone: 'error' as const }
+    }
+
+    return { message: 'Draft not saved yet', tone: 'neutral' as const }
+  }, [
+    error,
+    helloQuery.error,
+    submitStatus,
+    saveMutation.isPending,
+    saveMutation.isSuccess,
+    uploadStatus,
+    hasEdited,
+    validationErrors,
+  ])
+
+  const statusToneClass = {
+    neutral: 'text-slate-400',
+    warning: 'text-amber-400',
+    success: 'text-emerald-400',
+    error: 'text-rose-300',
+  }[statusIndicator.tone]
+
+  const saveButtonLabel = saveMutation.isPending
+    ? uploadStatus === 'uploading'
+      ? 'Uploading...'
+      : 'Saving...'
+    : 'Save Draft'
+
+  const submitButtonLabel = submitMutation.isPending
+    ? submitStatus === 'rendering'
+      ? 'Rendering...'
+      : submitStatus === 'uploading'
+        ? 'Uploading...'
+        : submitStatus === 'submitting'
+          ? 'Submitting...'
+          : 'Submitting...'
+    : 'Submit Card'
+
+  const isRenderInProgress =
+    submitStatus === 'rendering' || submitStatus === 'uploading' || submitStatus === 'submitting'
 
   const handleFieldChange = (key: keyof FormState) =>
     (event: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
       setHasEdited(true)
+      setError(null)
       setForm((prev) => ({ ...prev, [key]: event.target.value }))
     }
 
@@ -496,6 +631,7 @@ function App() {
     if (!file) return
 
     setHasEdited(true)
+    setError(null)
 
     if (!ALLOWED_UPLOAD_TYPES.has(file.type)) {
       setPhotoError('Unsupported file type. Use JPG, PNG, or WebP.')
@@ -528,6 +664,7 @@ function App() {
       // Reset upload state when new photo is selected
       setUploadedPhoto(null)
       setUploadStatus('idle')
+      setUploadProgress(null)
       setRenderedCardUrl(null)
       setSubmitStatus('idle')
       setMediaSize(null)
@@ -581,7 +718,9 @@ function App() {
   }
 
   const displayName = useMemo(() => {
-    const full = `${form.firstName} ${form.lastName}`.trim()
+    const first = form.firstName.trim()
+    const last = form.lastName.trim()
+    const full = [first, last].filter(Boolean).join(' ')
     return full.length > 0 ? full : 'Player Name'
   }, [form.firstName, form.lastName])
 
@@ -678,15 +817,28 @@ function App() {
                 <input
                   value={form.jerseyNumber}
                   onChange={handleFieldChange('jerseyNumber')}
-                  className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-white"
+                  maxLength={MAX_JERSEY_LENGTH}
+                  inputMode="numeric"
+                  pattern="\\d*"
+                  className={inputClass(hasEdited && Boolean(validationErrors.jerseyNumber))}
                   placeholder="15"
                 />
+                {hasEdited && validationErrors.jerseyNumber ? (
+                  <span className="mt-1 block text-[11px] text-rose-300">
+                    {validationErrors.jerseyNumber}
+                  </span>
+                ) : (
+                  <span className="mt-1 block text-[11px] text-slate-500">
+                    Numbers only, up to 3 digits.
+                  </span>
+                )}
               </label>
               <label className="text-xs uppercase tracking-wide text-slate-400">
                 First Name <span className="text-rose-400">*</span>
                 <input
                   value={form.firstName}
                   onChange={handleFieldChange('firstName')}
+                  maxLength={MAX_NAME_LENGTH}
                   className={inputClass(hasEdited && Boolean(validationErrors.firstName))}
                   placeholder="Brandon"
                 />
@@ -701,6 +853,7 @@ function App() {
                 <input
                   value={form.lastName}
                   onChange={handleFieldChange('lastName')}
+                  maxLength={MAX_NAME_LENGTH}
                   className={inputClass(hasEdited && Boolean(validationErrors.lastName))}
                   placeholder="Williams"
                 />
@@ -761,7 +914,7 @@ function App() {
                 disabled={saveMutation.isPending}
                 className="rounded-full bg-white px-5 py-2 text-xs font-semibold text-slate-900 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-70"
               >
-                Save Draft
+                {saveButtonLabel}
               </button>
               <button
                 type="button"
@@ -769,30 +922,33 @@ function App() {
                 disabled={!canSubmit}
                 className="rounded-full bg-emerald-500 px-5 py-2 text-xs font-semibold text-white transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {submitMutation.isPending ? 'Submitting...' : 'Submit Card'}
+                {submitButtonLabel}
               </button>
               <span className="text-xs text-slate-500">
                 Submit saves a draft automatically.
               </span>
-              <span className="text-xs text-slate-400">{statusMessage}</span>
-              {submitStatus !== 'idle' && submitStatus !== 'done' && submitStatus !== 'error' && (
-                <span className="text-xs text-amber-400">
-                  {submitStatus === 'rendering' && 'Rendering card...'}
-                  {submitStatus === 'uploading' && 'Uploading render...'}
-                  {submitStatus === 'submitting' && 'Submitting...'}
-                </span>
-              )}
-              {!submitMutation.isPending && hasEdited && Object.keys(validationErrors).length > 0 && (
-                <span className="text-xs text-rose-300">
-                  Complete required fields to submit.
-                </span>
-              )}
-              {submitStatus === 'done' && (
-                <span className="text-xs text-emerald-400">Card submitted!</span>
-              )}
-              {errorMessage ? (
-                <span className="text-xs text-rose-300">{errorMessage}</span>
-              ) : null}
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                <span className={statusToneClass}>{statusIndicator.message}</span>
+                {uploadProgress ? (
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="h-1 w-24 overflow-hidden rounded-full bg-white/10"
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={uploadProgress.percent}
+                    >
+                      <div
+                        className="h-full rounded-full bg-emerald-400 transition-all"
+                        style={{ width: `${uploadProgress.percent}%` }}
+                      />
+                    </div>
+                    <span className="text-[11px] text-slate-400">
+                      {uploadProgress.kind === 'original' ? 'Photo' : 'Render'} {uploadProgress.percent}%
+                    </span>
+                  </div>
+                ) : null}
+              </div>
         </div>
       </section>
 
@@ -826,7 +982,16 @@ function App() {
           ) : (
             <div className="mt-4">
               <div className="flex aspect-[825/1125] w-full items-center justify-center rounded-2xl border border-dashed border-emerald-500/30 bg-slate-950/50 text-xs text-emerald-200/70">
-                Submit your card to generate the final render.
+                {isRenderInProgress ? (
+                  <div className="flex flex-col items-center gap-3 text-emerald-200/70">
+                    <div className="h-10 w-10 animate-spin rounded-full border border-emerald-400/40 border-t-transparent" />
+                    <span className="text-[11px] uppercase tracking-[0.2em]">
+                      Building render
+                    </span>
+                  </div>
+                ) : (
+                  'Submit your card to generate the final render.'
+                )}
               </div>
             </div>
           )}

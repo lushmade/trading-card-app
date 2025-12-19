@@ -115,13 +115,13 @@ Submit now requires required fields, a photo, and a valid crop; inline validatio
 ## Next Steps (Phase 4+)
 
 ### Hardening
-- [ ] Error handling - Better error messages, retry logic for failed uploads
+- [x] Error handling - Better error messages, retry logic for failed uploads
 - [x] Basic form validation - Required fields + file size/type checks
-- [ ] Form validation - Jersey number format, name length limits
-- [ ] Loading states - Skeleton loaders, progress indicators during render
+- [x] Form validation - Jersey number format, name length limits
+- [x] Loading states - Skeleton loaders, progress indicators during render
 - [x] S3 lifecycle rules - Auto-delete orphaned uploads after 14 days
 - [x] Submit requires complete card - Client gating for photo + crop (auto-saves on submit)
-- [ ] Server-side submit completeness validation - Enforce `photo.originalKey` + dimensions + crop before allowing submit
+- [x] Server-side submit completeness validation - Enforce `photo.originalKey` + dimensions + crop before allowing submit
 - [x] Presigned POST for strict size enforcement - Enforces size/type via POST policy
 - [x] Validate upload keys belong to card - Reject cross-card key updates
 - [x] Conditional submit writes - Idempotent submit with DynamoDB condition
@@ -138,15 +138,15 @@ Submit now requires required fields, a photo, and a valid crop; inline validatio
 ### UX Upgrades
 - [ ] Photo upload prominence - Larger drop zone, drag-and-drop support, clearer empty state
 - [ ] Live card preview - Show real-time preview of final card layout (not just crop), reuse `renderCard` logic
-- [ ] Button state feedback - Show "Saving..." / "Creating..." on buttons during mutations, not just status text
+- [x] Button state feedback - Show "Saving..." / "Creating..." on buttons during mutations, not just status text
 - [x] Submit enablement hint - Helper text when required fields are missing
-- [ ] Status consolidation - Single status indicator instead of multiple inline messages
+- [x] Status consolidation - Single status indicator instead of multiple inline messages
 - [x] Field validation UI - Inline error messages + required field indicators
-- [ ] Jersey number format hint - Add a format helper for jersey numbers
+- [x] Jersey number format hint - Add a format helper for jersey numbers
 - [x] Rendered card panel - Move rendered preview to top of right column
 - [x] Submit flow clarity - Auto-save draft on submit
-- [ ] Page title - Change from "BHVR" to "Trading Card Studio"
-- [ ] Upload progress - Show progress bar during photo upload (especially for large files)
+- [x] Page title - Change from "BHVR" to "Trading Card Studio"
+- [x] Upload progress - Show progress bar during photo upload (especially for large files)
 - [ ] Success celebration - Brief animation or visual feedback when card is submitted successfully
 - [ ] Keyboard navigation - Tab order, Enter to submit form sections
 

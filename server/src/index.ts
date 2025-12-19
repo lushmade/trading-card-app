@@ -110,6 +110,41 @@ const pickPhoto = (value: unknown): CardDesign['photo'] | undefined => {
   return Object.keys(photo).length > 0 ? photo : undefined
 }
 
+const isValidDimension = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0
+
+const isValidCropRect = (crop?: CropRect) => {
+  if (!crop) return false
+
+  const { x, y, w, h, rotateDeg } = crop
+
+  if (![x, y, w, h].every((value) => typeof value === 'number' && Number.isFinite(value))) {
+    return false
+  }
+
+  const rotateOk = rotateDeg === 0 || rotateDeg === 90 || rotateDeg === 180 || rotateDeg === 270
+  if (!rotateOk) return false
+
+  if (x < 0 || y < 0 || x > 1 || y > 1) return false
+  if (w <= 0 || h <= 0 || w > 1 || h > 1) return false
+  if (x + w > 1 || y + h > 1) return false
+
+  return true
+}
+
+const getSubmitValidationError = (card: CardDesign) => {
+  const photo = card.photo
+
+  if (!photo) return 'photo is required before submitting'
+  if (!photo.originalKey) return 'photo.originalKey is required before submitting'
+  if (!isValidDimension(photo.width) || !isValidDimension(photo.height)) {
+    return 'photo dimensions are required before submitting'
+  }
+  if (!isValidCropRect(photo.crop)) return 'photo.crop is required before submitting'
+
+  return null
+}
+
 const validatePhotoKeys = (cardId: string, photo?: CardDesign['photo']) => {
   if (!photo) return null
 
@@ -408,6 +443,11 @@ app.post('/cards/:id/submit', async (c) => {
   const renderKeyPattern = new RegExp(`^renders/${id}/[a-f0-9-]+\\.png$`)
   if (!renderKeyPattern.test(renderKey)) {
     return badRequest(c, 'Invalid renderKey format')
+  }
+
+  const submitValidationError = getSubmitValidationError(card)
+  if (submitValidationError) {
+    return badRequest(c, submitValidationError)
   }
 
   const now = nowIso()
