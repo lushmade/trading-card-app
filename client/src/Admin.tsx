@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import JSZip from 'jszip'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { Card, TournamentConfig, TournamentListEntry } from 'shared'
+import { resolveTemplateId, type Card, type TournamentConfig, type TournamentListEntry } from 'shared'
 import { api, assetUrlForKey } from './api'
+import { renderCard, resolveTemplateSnapshot } from './renderCard'
+import TemplateEditor from './components/TemplateEditor'
 
 type LogosZipResult = {
   uploaded: string[]
@@ -18,6 +20,16 @@ type BundleImportResult = {
     assetsSkipped: string[]
   }
 }
+
+type PresignResponse = {
+  uploadUrl: string
+  key: string
+  method: 'POST' | 'PUT'
+  headers?: Record<string, string>
+  fields?: Record<string, string>
+}
+
+const MAX_UPLOAD_RETRIES = 1
 
 const cardDisplayName = (card: Card) => {
   if (card.cardType === 'rare') {
@@ -38,6 +50,56 @@ const safeZipName = (value: string) =>
     .replace(/\s+/g, '-')
     .slice(0, 60) || 'card'
 
+const getUploadFilename = (key: string) => {
+  const lastSegment = key.split('/').pop()
+  return lastSegment && lastSegment.length > 0 ? lastSegment : 'upload'
+}
+
+const toUploadFile = (data: Blob, key: string) =>
+  data instanceof File
+    ? data
+    : new File([data], getUploadFilename(key), {
+        type: data.type || 'application/octet-stream',
+      })
+
+async function uploadToS3(presign: PresignResponse, data: Blob): Promise<void> {
+  const uploadOnce = async () => {
+    if (presign.method === 'POST') {
+      if (!presign.fields) {
+        throw new Error('Upload fields are missing')
+      }
+      const formData = new FormData()
+      for (const [key, value] of Object.entries(presign.fields)) {
+        formData.append(key, value)
+      }
+      formData.append('file', toUploadFile(data, presign.key))
+      const res = await fetch(presign.uploadUrl, { method: 'POST', body: formData })
+      if (!res.ok) throw new Error('Upload failed')
+      return
+    }
+
+    const res = await fetch(presign.uploadUrl, {
+      method: presign.method,
+      headers: presign.headers,
+      body: data,
+    })
+    if (!res.ok) throw new Error('Upload failed')
+  }
+
+  let lastError: unknown = null
+  for (let attempt = 0; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
+    try {
+      await uploadOnce()
+      return
+    } catch (err) {
+      lastError = err
+    }
+  }
+
+  if (lastError instanceof Error) throw lastError
+  throw new Error('Upload failed')
+}
+
 export default function Admin() {
   const queryClient = useQueryClient()
   const [passwordInput, setPasswordInput] = useState('')
@@ -49,6 +111,7 @@ export default function Admin() {
   const [logosZipResult, setLogosZipResult] = useState<LogosZipResult | null>(null)
   const [bundleFile, setBundleFile] = useState<File | null>(null)
   const [bundleResult, setBundleResult] = useState<BundleImportResult | null>(null)
+  const [renderingCardId, setRenderingCardId] = useState<string | null>(null)
 
   // Save password to sessionStorage when it changes
   useEffect(() => {
@@ -100,6 +163,54 @@ export default function Admin() {
       setConfigDraft(JSON.stringify(configQuery.data, null, 2))
     }
   }, [configQuery.data])
+
+  const configParsed = useMemo(() => {
+    try {
+      return JSON.parse(configDraft) as TournamentConfig
+    } catch {
+      return null
+    }
+  }, [configDraft])
+
+  const activeConfig = configParsed ?? configQuery.data ?? null
+
+  const templateOptions = useMemo(() => {
+    if (activeConfig?.templates && activeConfig.templates.length > 0) {
+      return activeConfig.templates
+    }
+    return [
+      { id: 'classic', label: 'Classic' },
+      { id: 'noir', label: 'Noir' },
+    ]
+  }, [activeConfig])
+
+  const templateLabelFor = (templateId: string) =>
+    templateOptions.find((template) => template.id === templateId)?.label ?? templateId
+
+  const uploadOverlay = async (templateId: string, file: File) => {
+    if (!activeTournamentId) {
+      throw new Error('Select a tournament first')
+    }
+    if (!adminPassword) {
+      throw new Error('Admin password is required')
+    }
+    const res = await fetch(api(`/admin/tournaments/${activeTournamentId}/assets/presign`), {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({
+        kind: 'templateOverlay',
+        templateId,
+        contentType: file.type,
+      }),
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}))
+      throw new Error(error.error ?? 'Presign failed')
+    }
+    const presign = await res.json() as PresignResponse
+    await uploadToS3(presign, file)
+    return presign.key
+  }
 
   const cardsQuery = useQuery({
     queryKey: ['admin-cards', statusFilter, activeTournamentId, adminPassword],
@@ -193,18 +304,107 @@ export default function Admin() {
     },
   })
 
-  const renderMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await fetch(api(`/admin/cards/${id}/render`), {
-        method: 'POST',
+  const templateMutation = useMutation({
+    mutationFn: async ({ id, templateId }: { id: string; templateId: string | null }) => {
+      const res = await fetch(api(`/admin/cards/${id}`), {
+        method: 'PATCH',
         headers: adminHeaders,
-        body: JSON.stringify({}),
+        body: JSON.stringify({ templateId }),
       })
       if (!res.ok) {
         const error = await res.json().catch(() => ({}))
         throw new Error(error.error ?? 'Request failed')
       }
       return res.json()
+    },
+    onMutate: async ({ id, templateId }) => {
+      const queryKey = ['admin-cards', statusFilter, activeTournamentId, adminPassword] as const
+      await queryClient.cancelQueries({ queryKey })
+      const previous = queryClient.getQueryData<Card[]>(queryKey)
+      queryClient.setQueryData<Card[]>(queryKey, (cards) =>
+        (cards ?? []).map((c) =>
+          c.id === id ? { ...c, templateId: templateId ?? undefined } : c
+        )
+      )
+      return { previous, queryKey }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(context.queryKey, context.previous)
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-cards', statusFilter, activeTournamentId] })
+    },
+  })
+
+  const renderMutation = useMutation({
+    mutationFn: async (card: Card) => {
+      if (!activeConfig) {
+        throw new Error('Tournament config is not available')
+      }
+
+      const photoRes = await fetch(api(`/admin/cards/${card.id}/photo-url`), {
+        headers: { 'Authorization': `Bearer ${adminPassword}` },
+      })
+      if (!photoRes.ok) {
+        const error = await photoRes.json().catch(() => ({}))
+        throw new Error(error.error ?? 'Photo request failed')
+      }
+      const photoData = await photoRes.json() as { url: string }
+
+      const { templateId, templateSnapshot } = resolveTemplateSnapshot({
+        card,
+        config: activeConfig,
+      })
+
+      const blob = await renderCard({
+        card,
+        config: activeConfig,
+        imageUrl: photoData.url,
+        resolveAssetUrl: assetUrlForKey,
+        templateId,
+      })
+
+      const presignRes = await fetch(api(`/admin/cards/${card.id}/renders/presign`), {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          contentType: blob.type || 'image/png',
+          contentLength: blob.size,
+        }),
+      })
+      if (!presignRes.ok) {
+        const error = await presignRes.json().catch(() => ({}))
+        throw new Error(error.error ?? 'Render presign failed')
+      }
+      const presign = await presignRes.json() as PresignResponse
+
+      await uploadToS3(presign, blob)
+
+      const renderMeta = {
+        key: presign.key,
+        templateId,
+        renderedAt: new Date().toISOString(),
+        templateSnapshot,
+      }
+
+      const commitRes = await fetch(api(`/admin/cards/${card.id}/renders/commit`), {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({ renderKey: presign.key, renderMeta }),
+      })
+      if (!commitRes.ok) {
+        const error = await commitRes.json().catch(() => ({}))
+        throw new Error(error.error ?? 'Render commit failed')
+      }
+      return commitRes.json()
+    },
+    onMutate: (card) => {
+      setRenderingCardId(card.id)
+    },
+    onSettled: () => {
+      setRenderingCardId(null)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin-cards', statusFilter, activeTournamentId] })
@@ -227,14 +427,6 @@ export default function Admin() {
       queryClient.invalidateQueries({ queryKey: ['admin-cards', statusFilter, activeTournamentId] })
     },
   })
-
-  const configParsed = useMemo(() => {
-    try {
-      return JSON.parse(configDraft) as TournamentConfig
-    } catch {
-      return null
-    }
-  }, [configDraft])
 
   // Show loading state while verifying password
   if (adminPassword && tournamentsQuery.isPending) {
@@ -590,6 +782,18 @@ export default function Admin() {
           </section>
         </div>
 
+        {activeConfig ? (
+          <TemplateEditor
+            config={activeConfig}
+            onChange={(next) => setConfigDraft(JSON.stringify(next, null, 2))}
+            uploadOverlay={uploadOverlay}
+          />
+        ) : (
+          <section className="rounded-3xl border border-white/10 bg-white/5 p-6 text-xs text-slate-400">
+            Fix the tournament JSON to edit templates.
+          </section>
+        )}
+
         <section className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-semibold text-white">Card Review</h2>
@@ -646,47 +850,90 @@ export default function Admin() {
               </select>
             </div>
           </div>
+          {renderMutation.isError && (
+            <p className="mt-2 text-xs text-rose-400">
+              {renderMutation.error instanceof Error ? renderMutation.error.message : 'Render failed'}
+            </p>
+          )}
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {cardsQuery.data?.map((card) => (
-              <div key={card.id} className="rounded-2xl border border-white/10 bg-slate-950/60 p-3 text-xs text-slate-300">
-                <div className="space-y-1">
-                  <div className="text-sm text-white">{card.cardType}</div>
-                  <div>{card.id}</div>
-                  <div>{cardDisplayName(card)}</div>
-                </div>
-                {card.renderKey ? (
-                  <img
-                    src={assetUrlForKey(card.renderKey)}
-                    alt="Rendered card"
-                    className="mt-3 w-full rounded-xl"
-                  />
-                ) : (
-                  <div className="mt-3 flex aspect-[825/1125] items-center justify-center rounded-xl border border-dashed border-white/10 text-[11px] text-slate-500">
-                    No render
+            {cardsQuery.data?.map((card) => {
+              const defaultTemplateId = resolveTemplateId(
+                { cardType: card.cardType },
+                activeConfig ?? undefined
+              )
+              const defaultTemplateLabel = templateLabelFor(defaultTemplateId)
+              const hasUnknownTemplate =
+                Boolean(card.templateId) &&
+                !templateOptions.some((template) => template.id === card.templateId)
+              const isRendering = renderingCardId === card.id
+
+              return (
+                <div key={card.id} className="rounded-2xl border border-white/10 bg-slate-950/60 p-3 text-xs text-slate-300">
+                  <div className="space-y-1">
+                    <div className="text-sm text-white">{card.cardType}</div>
+                    <div>{card.id}</div>
+                    <div>{cardDisplayName(card)}</div>
                   </div>
-                )}
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {card.status === 'submitted' ? (
-                    <button
-                      type="button"
-                      onClick={() => renderMutation.mutate(card.id)}
-                      className="rounded-full border border-emerald-500/40 px-3 py-1 text-[11px] text-emerald-300"
+
+                  <label className="mt-3 block text-[11px] uppercase tracking-wide text-slate-400">
+                    Template Override
+                    <select
+                      value={card.templateId ?? ''}
+                      onChange={(event) =>
+                        templateMutation.mutate({
+                          id: card.id,
+                          templateId: event.target.value ? event.target.value : null,
+                        })
+                      }
+                      className="mt-2 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-xs text-white"
                     >
-                      Mark Rendered
-                    </button>
-                  ) : null}
-                  {card.status === 'draft' ? (
-                    <button
-                      type="button"
-                      onClick={() => deleteMutation.mutate(card.id)}
-                      className="rounded-full border border-rose-500/40 px-3 py-1 text-[11px] text-rose-300"
-                    >
-                      Delete Draft
-                    </button>
-                  ) : null}
+                      <option value="">{`Default (${defaultTemplateLabel})`}</option>
+                      {hasUnknownTemplate ? (
+                        <option value={card.templateId ?? ''}>{`Custom (${card.templateId})`}</option>
+                      ) : null}
+                      {templateOptions.map((template) => (
+                        <option key={template.id} value={template.id}>
+                          {template.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  {card.renderKey ? (
+                    <img
+                      src={assetUrlForKey(card.renderKey)}
+                      alt="Rendered card"
+                      className="mt-3 w-full rounded-xl"
+                    />
+                  ) : (
+                    <div className="mt-3 flex aspect-[825/1125] items-center justify-center rounded-xl border border-dashed border-white/10 text-[11px] text-slate-500">
+                      No render
+                    </div>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {card.status !== 'draft' ? (
+                      <button
+                        type="button"
+                        onClick={() => renderMutation.mutate(card)}
+                        disabled={isRendering || renderMutation.isPending}
+                        className="rounded-full border border-emerald-500/40 px-3 py-1 text-[11px] text-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isRendering ? 'Rendering...' : 'Render'}
+                      </button>
+                    ) : null}
+                    {card.status === 'draft' ? (
+                      <button
+                        type="button"
+                        onClick={() => deleteMutation.mutate(card.id)}
+                        className="rounded-full border border-rose-500/40 px-3 py-1 text-[11px] text-rose-300"
+                      >
+                        Delete Draft
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </section>
       </div>

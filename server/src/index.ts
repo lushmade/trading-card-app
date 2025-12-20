@@ -9,7 +9,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { ConditionalCheckFailedException, DynamoDBClient } from '@aws-sdk/client-dynamodb'
 import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb'
-import type { ApiResponse, Card, CardStatus, CardType, CropRect, TournamentConfig, TournamentListEntry } from 'shared'
+import type { ApiResponse, Card, CardStatus, CardType, CropRect, RenderMeta, TournamentConfig, TournamentListEntry } from 'shared'
 import {
   ALLOWED_RENDER_TYPES as ALLOWED_RENDER_TYPES_LIST,
   ALLOWED_UPLOAD_TYPES as ALLOWED_UPLOAD_TYPES_LIST,
@@ -228,6 +228,78 @@ const validatePhotoKeys = (cardId: string, photo?: Card['photo']) => {
   }
 
   return null
+}
+
+const TEMPLATE_THEME_KEYS = [
+  'gradientStart',
+  'gradientEnd',
+  'border',
+  'accent',
+  'label',
+  'nameColor',
+  'meta',
+  'watermark',
+] as const
+
+const TEMPLATE_FLAG_KEYS = [
+  'showGradient',
+  'showBorders',
+  'showWatermarkJersey',
+] as const
+
+const parseRenderMeta = (value: unknown, renderKey: string): RenderMeta | string => {
+  if (!isRecord(value)) return 'renderMeta must be an object'
+
+  const templateId = normalizeString(value.templateId)
+  if (!templateId) return 'renderMeta.templateId is required'
+
+  const renderedAt = normalizeString(value.renderedAt)
+  if (!renderedAt) return 'renderMeta.renderedAt is required'
+
+  const key = normalizeString(value.key) ?? renderKey
+  if (key !== renderKey) return 'renderMeta.key must match renderKey'
+
+  if (!isRecord(value.templateSnapshot)) return 'renderMeta.templateSnapshot is required'
+  const snapshot = value.templateSnapshot
+
+  const overlayKey = normalizeString(snapshot.overlayKey)
+
+  if (!isRecord(snapshot.theme)) return 'renderMeta.templateSnapshot.theme is required'
+  const themeSource = snapshot.theme
+  const theme = {} as RenderMeta['templateSnapshot']['theme']
+  for (const field of TEMPLATE_THEME_KEYS) {
+    const raw = normalizeString(themeSource[field])
+    if (!raw) return `renderMeta.templateSnapshot.theme.${field} is required`
+    theme[field] = raw
+  }
+
+  if (!isRecord(snapshot.flags)) return 'renderMeta.templateSnapshot.flags is required'
+  const flagsSource = snapshot.flags
+  const flags = {} as RenderMeta['templateSnapshot']['flags']
+  for (const field of TEMPLATE_FLAG_KEYS) {
+    const raw = flagsSource[field]
+    if (typeof raw !== 'boolean') {
+      return `renderMeta.templateSnapshot.flags.${field} must be a boolean`
+    }
+    flags[field] = raw
+  }
+
+  const overlayPlacement = normalizeString(snapshot.overlayPlacement)
+  if (overlayPlacement !== 'belowText' && overlayPlacement !== 'aboveText') {
+    return 'renderMeta.templateSnapshot.overlayPlacement is invalid'
+  }
+
+  return {
+    key,
+    templateId,
+    renderedAt,
+    templateSnapshot: {
+      overlayKey: overlayKey ?? undefined,
+      theme,
+      flags,
+      overlayPlacement,
+    },
+  }
 }
 
 const validateCardFields = (card: CardInput) => {
@@ -672,10 +744,22 @@ app.put('/admin/tournaments/:id', async (c) => {
     return badRequest(c, 'name and year are required')
   }
 
+  const existingConfig =
+    (await readJsonFromS3<TournamentConfig>(getConfigKey(id, 'draft'))) ??
+    (await readJsonFromS3<TournamentConfig>(getConfigKey(id, 'published'))) ??
+    FALLBACK_CONFIGS[id] ??
+    null
+  const existingTeamIds = new Set(existingConfig?.teams?.map((team) => team.id) ?? [])
+
   // Validate team IDs to prevent path traversal in S3 keys
   for (const team of config.teams ?? []) {
     if (!isSafeId(team.id)) {
-      return badRequest(c, `Team id "${team.id}" must be 3-64 lowercase alphanumeric characters or hyphens`)
+      if (!existingTeamIds.has(team.id)) {
+        return badRequest(
+          c,
+          `Team id "${team.id}" must be 3-64 lowercase alphanumeric characters or hyphens`
+        )
+      }
     }
   }
 
@@ -794,9 +878,13 @@ app.post('/admin/tournaments/:id/assets/presign', async (c) => {
   const kind = normalizeString(body.kind)
   const contentType = normalizeString(body.contentType)
   const teamId = normalizeString(body.teamId)
+  const templateId = normalizeString(body.templateId)
 
   if (!kind) return badRequest(c, 'kind is required')
   if (!contentType) return badRequest(c, 'contentType is required')
+  if (kind === 'templateOverlay' && contentType !== 'image/png') {
+    return badRequest(c, 'templateOverlay must be image/png')
+  }
 
   const ext = getExtension(contentType)
   if (!ext) return badRequest(c, 'Unsupported contentType')
@@ -809,6 +897,11 @@ app.post('/admin/tournaments/:id/assets/presign', async (c) => {
   } else if (kind === 'teamLogo') {
     if (!teamId) return badRequest(c, 'teamId is required')
     key = `config/tournaments/${id}/teams/${teamId}.${ext}`
+  } else if (kind === 'templateOverlay') {
+    if (!templateId) return badRequest(c, 'templateId is required')
+    if (!isSafeId(templateId)) return badRequest(c, 'templateId is invalid')
+    const uploadId = randomUUID().slice(0, 8)
+    key = `config/tournaments/${id}/overlays/${templateId}/${uploadId}.${ext}`
   }
 
   if (!key) return badRequest(c, 'kind is invalid')
@@ -1125,6 +1218,10 @@ app.post('/uploads/presign', async (c) => {
   const card = existingCard.Item as Card
   if (!card.editToken || card.editToken !== editToken) {
     return c.json({ error: 'Invalid edit token' }, 403)
+  }
+
+  if (card.status !== 'draft') {
+    return c.json({ error: 'Card is no longer editable' }, 409)
   }
 
   const length = typeof contentLength === 'number' ? contentLength : Number(contentLength)
@@ -1552,17 +1649,20 @@ app.post('/cards/:id/submit', async (c) => {
   const body = await getJsonBody(c)
   if (!isRecord(body)) return badRequest(c, 'Invalid request body')
 
-  // Require renderKey
-  if (typeof body.renderKey !== 'string' || body.renderKey.trim() === '') {
-    return badRequest(c, 'renderKey is required')
+  let renderKey: string | undefined
+  if (body.renderKey !== undefined && body.renderKey !== null) {
+    if (typeof body.renderKey !== 'string' || body.renderKey.trim() === '') {
+      return badRequest(c, 'renderKey must be a non-empty string')
+    }
+    renderKey = body.renderKey.trim()
   }
 
-  const renderKey = body.renderKey as string
-
-  // Validate renderKey format: must be renders/<cardId>/<id>.png
-  const renderKeyPattern = new RegExp(`^renders/${id}/[a-f0-9-]+\\.png$`)
-  if (!renderKeyPattern.test(renderKey)) {
-    return badRequest(c, 'Invalid renderKey format')
+  let renderMeta: RenderMeta | undefined
+  if (body.renderMeta !== undefined) {
+    if (!renderKey) return badRequest(c, 'renderMeta requires renderKey')
+    const parsed = parseRenderMeta(body.renderMeta, renderKey)
+    if (typeof parsed === 'string') return badRequest(c, parsed)
+    renderMeta = parsed
   }
 
   const submitValidationError = getSubmitValidationError(card)
@@ -1570,40 +1670,61 @@ app.post('/cards/:id/submit', async (c) => {
     return badRequest(c, submitValidationError)
   }
 
-  try {
-    await s3.send(
-      new HeadObjectCommand({
-        Bucket: Resource.Media.name,
-        Key: renderKey,
-      })
-    )
-  } catch {
-    return badRequest(c, 'renderKey not found in storage')
+  if (renderKey) {
+    // Validate renderKey format: must be renders/<cardId>/<id>.png
+    const renderKeyPattern = new RegExp(`^renders/${id}/[a-f0-9-]+\\.png$`)
+    if (!renderKeyPattern.test(renderKey)) {
+      return badRequest(c, 'Invalid renderKey format')
+    }
+
+    try {
+      await s3.send(
+        new HeadObjectCommand({
+          Bucket: Resource.Media.name,
+          Key: renderKey,
+        })
+      )
+    } catch {
+      return badRequest(c, 'renderKey not found in storage')
+    }
   }
 
   const now = nowIso()
   const statusCreatedAt = buildStatusCreatedAt('submitted', now)
   try {
+    const setExpressions = ['#status = :status', '#updatedAt = :updatedAt', '#statusCreatedAt = :statusCreatedAt']
+    const expressionAttributeNames: Record<string, string> = {
+      '#status': 'status',
+      '#updatedAt': 'updatedAt',
+      '#statusCreatedAt': 'statusCreatedAt',
+    }
+    const expressionAttributeValues: Record<string, unknown> = {
+      ':status': 'submitted',
+      ':draft': 'draft',
+      ':updatedAt': now,
+      ':statusCreatedAt': statusCreatedAt,
+    }
+
+    if (renderKey) {
+      setExpressions.push('#renderKey = :renderKey')
+      expressionAttributeNames['#renderKey'] = 'renderKey'
+      expressionAttributeValues[':renderKey'] = renderKey
+    }
+
+    if (renderMeta) {
+      setExpressions.push('#renderMeta = :renderMeta')
+      expressionAttributeNames['#renderMeta'] = 'renderMeta'
+      expressionAttributeValues[':renderMeta'] = renderMeta
+    }
+
     const result = await ddb.send(
       new UpdateCommand({
         TableName: Resource.Cards.name,
         Key: { id },
-        UpdateExpression:
-          'SET #renderKey = :renderKey, #status = :status, #updatedAt = :updatedAt, #statusCreatedAt = :statusCreatedAt',
+        UpdateExpression: `SET ${setExpressions.join(', ')}`,
         ConditionExpression: '#status = :draft',
-        ExpressionAttributeNames: {
-          '#renderKey': 'renderKey',
-          '#status': 'status',
-          '#updatedAt': 'updatedAt',
-          '#statusCreatedAt': 'statusCreatedAt',
-        },
-        ExpressionAttributeValues: {
-          ':renderKey': renderKey,
-          ':status': 'submitted',
-          ':draft': 'draft',
-          ':updatedAt': now,
-          ':statusCreatedAt': statusCreatedAt,
-        },
+        ExpressionAttributeNames: expressionAttributeNames,
+        ExpressionAttributeValues: expressionAttributeValues,
         ReturnValues: 'ALL_NEW',
       })
     )
@@ -1614,7 +1735,8 @@ app.post('/cards/:id/submit', async (c) => {
 
     const next: Card = {
       ...card,
-      renderKey,
+      renderKey: renderKey ?? card.renderKey,
+      renderMeta: renderMeta ?? card.renderMeta,
       status: 'submitted',
       updatedAt: now,
       statusCreatedAt,
@@ -1688,6 +1810,255 @@ app.get('/admin/cards', async (c) => {
     })
   )
   return c.json(result.Items ?? [])
+})
+
+app.patch('/admin/cards/:id', async (c) => {
+  const id = c.req.param('id')
+  const body = await getJsonBody(c)
+  if (!isRecord(body)) return badRequest(c, 'Invalid request body')
+
+  const keys = Object.keys(body)
+  if (keys.length === 0 || keys.some((key) => key !== 'templateId')) {
+    return badRequest(c, 'Only templateId can be updated')
+  }
+
+  const templateIdInput = body.templateId
+  let templateId: string | null = null
+  let removeTemplateId = false
+
+  if (templateIdInput === null) {
+    removeTemplateId = true
+  } else if (typeof templateIdInput === 'string') {
+    const trimmed = templateIdInput.trim()
+    if (!trimmed) {
+      removeTemplateId = true
+    } else {
+      const error = ensureMaxLength(trimmed, MAX_TEMPLATE_LENGTH, 'templateId')
+      if (error) return badRequest(c, error)
+      templateId = trimmed
+    }
+  } else {
+    return badRequest(c, 'templateId must be a string')
+  }
+
+  const now = nowIso()
+  const setExpressions = ['#updatedAt = :updatedAt']
+  const removeExpressions: string[] = []
+  const names: Record<string, string> = {
+    '#id': 'id',
+    '#updatedAt': 'updatedAt',
+    '#templateId': 'templateId',
+  }
+  const values: Record<string, unknown> = {
+    ':updatedAt': now,
+  }
+
+  if (templateId) {
+    setExpressions.push('#templateId = :templateId')
+    values[':templateId'] = templateId
+  } else if (removeTemplateId) {
+    removeExpressions.push('#templateId')
+  }
+
+  const updateExpression = `SET ${setExpressions.join(', ')}${
+    removeExpressions.length > 0 ? ` REMOVE ${removeExpressions.join(', ')}` : ''
+  }`
+
+  const result = await ddb.send(
+    new UpdateCommand({
+      TableName: Resource.Cards.name,
+      Key: { id },
+      UpdateExpression: updateExpression,
+      ConditionExpression: 'attribute_exists(#id)',
+      ExpressionAttributeNames: names,
+      ExpressionAttributeValues: values,
+      ReturnValues: 'ALL_NEW',
+    })
+  )
+
+  if (!result.Attributes) {
+    return c.json({ error: 'Card not found' }, 404)
+  }
+
+  return c.json(result.Attributes)
+})
+
+app.get('/admin/cards/:id/photo-url', async (c) => {
+  const id = c.req.param('id')
+  const existing = await ddb.send(
+    new GetCommand({
+      TableName: Resource.Cards.name,
+      Key: { id },
+    })
+  )
+
+  if (!existing.Item) {
+    return c.json({ error: 'Card not found' }, 404)
+  }
+
+  const card = existing.Item as Card
+  const originalKey = card.photo?.originalKey
+  if (!originalKey) {
+    return c.json({ error: 'Card has no original photo' }, 400)
+  }
+
+  const url = await getSignedUrl(
+    s3,
+    new GetObjectCommand({
+      Bucket: Resource.Media.name,
+      Key: originalKey,
+    }),
+    { expiresIn: 300 }
+  )
+
+  return c.json({ url })
+})
+
+app.post('/admin/cards/:id/renders/presign', async (c) => {
+  const id = c.req.param('id')
+  const body = await getJsonBody(c)
+  if (!isRecord(body)) return badRequest(c, 'Invalid request body')
+
+  const existing = await ddb.send(
+    new GetCommand({
+      TableName: Resource.Cards.name,
+      Key: { id },
+    })
+  )
+
+  if (!existing.Item) {
+    return c.json({ error: 'Card not found' }, 404)
+  }
+
+  const card = existing.Item as Card
+  if (card.status === 'draft') {
+    return badRequest(c, 'Draft cards cannot be rendered')
+  }
+
+  const contentType = normalizeString(body.contentType)
+  if (!contentType) return badRequest(c, 'contentType is required')
+
+  const length = typeof body.contentLength === 'number' ? body.contentLength : Number(body.contentLength)
+  if (!Number.isFinite(length) || length <= 0) {
+    return badRequest(c, 'contentLength must be a positive number')
+  }
+
+  if (length > MAX_UPLOAD_BYTES) {
+    return badRequest(c, 'File is too large')
+  }
+
+  if (!ALLOWED_RENDER_TYPES.has(contentType)) {
+    return badRequest(c, 'contentType is not allowed')
+  }
+
+  const key = getUploadKey(id, 'render', contentType)
+  if (!key) return badRequest(c, 'Unsupported contentType for render upload')
+
+  const { url, fields } = await createPresignedPost(s3, {
+    Bucket: Resource.Media.name,
+    Key: key,
+    Fields: {
+      'Content-Type': contentType,
+    },
+    Conditions: [
+      ['content-length-range', 1, MAX_UPLOAD_BYTES],
+      ['eq', '$Content-Type', contentType],
+    ],
+    Expires: 900,
+  })
+
+  return c.json({
+    uploadUrl: url,
+    key,
+    method: 'POST',
+    fields,
+  })
+})
+
+app.post('/admin/cards/:id/renders/commit', async (c) => {
+  const id = c.req.param('id')
+  const body = await getJsonBody(c)
+  if (!isRecord(body)) return badRequest(c, 'Invalid request body')
+
+  const renderKey = normalizeString(body.renderKey)
+  if (!renderKey) return badRequest(c, 'renderKey is required')
+
+  if (body.renderMeta === undefined) {
+    return badRequest(c, 'renderMeta is required')
+  }
+
+  const renderMeta = parseRenderMeta(body.renderMeta, renderKey)
+  if (typeof renderMeta === 'string') {
+    return badRequest(c, renderMeta)
+  }
+
+  // Validate renderKey format: must be renders/<cardId>/<id>.png
+  const renderKeyPattern = new RegExp(`^renders/${id}/[a-f0-9-]+\\.png$`)
+  if (!renderKeyPattern.test(renderKey)) {
+    return badRequest(c, 'Invalid renderKey format')
+  }
+
+  const existing = await ddb.send(
+    new GetCommand({
+      TableName: Resource.Cards.name,
+      Key: { id },
+    })
+  )
+
+  if (!existing.Item) {
+    return c.json({ error: 'Card not found' }, 404)
+  }
+
+  const card = existing.Item as Card
+  if (card.status === 'draft') {
+    return badRequest(c, 'Draft cards cannot be rendered')
+  }
+
+  try {
+    await s3.send(
+      new HeadObjectCommand({
+        Bucket: Resource.Media.name,
+        Key: renderKey,
+      })
+    )
+  } catch {
+    return badRequest(c, 'renderKey not found in storage')
+  }
+
+  const now = nowIso()
+  const statusCreatedAt = buildStatusCreatedAt('rendered', now)
+  const result = await ddb.send(
+    new UpdateCommand({
+      TableName: Resource.Cards.name,
+      Key: { id },
+      UpdateExpression:
+        'SET #renderKey = :renderKey, #renderMeta = :renderMeta, #status = :status, #updatedAt = :updatedAt, #statusCreatedAt = :statusCreatedAt',
+      ExpressionAttributeNames: {
+        '#renderKey': 'renderKey',
+        '#renderMeta': 'renderMeta',
+        '#status': 'status',
+        '#updatedAt': 'updatedAt',
+        '#statusCreatedAt': 'statusCreatedAt',
+      },
+      ExpressionAttributeValues: {
+        ':renderKey': renderKey,
+        ':renderMeta': renderMeta,
+        ':status': 'rendered',
+        ':updatedAt': now,
+        ':statusCreatedAt': statusCreatedAt,
+      },
+      ReturnValues: 'ALL_NEW',
+    })
+  )
+
+  return c.json(result.Attributes ?? {
+    ...card,
+    renderKey,
+    renderMeta,
+    status: 'rendered',
+    updatedAt: now,
+    statusCreatedAt,
+  })
 })
 
 app.post('/admin/cards/:id/render', async (c) => {

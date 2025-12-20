@@ -13,6 +13,49 @@ export type CardType =
 
 export type CardStatus = "draft" | "submitted" | "rendered";
 
+export type TemplateTheme = {
+  gradientStart: string;
+  gradientEnd: string;
+  border: string;
+  accent: string;
+  label: string;
+  nameColor: string;
+  meta: string;
+  watermark: string;
+};
+
+export type TemplateFlags = {
+  showGradient: boolean;
+  showBorders: boolean;
+  showWatermarkJersey: boolean;
+};
+
+export type TemplateDefinition = {
+  id: string;
+  label: string;
+  overlayKey?: string;
+  theme?: Partial<TemplateTheme>;
+  flags?: Partial<TemplateFlags>;
+  overlayPlacement?: "belowText" | "aboveText";
+};
+
+export type TemplateDefaults = {
+  fallback: string;
+  byCardType?: Partial<Record<CardType, string>>;
+};
+
+export type RenderMeta = {
+  key: string;
+  templateId: string;
+  renderedAt: string;
+  templateSnapshot: {
+    overlayKey?: string;
+    theme: TemplateTheme;
+    flags: TemplateFlags;
+    overlayPlacement: "belowText" | "aboveText";
+  };
+};
+
 export type CropRect = {
   x: number;
   y: number;
@@ -39,6 +82,7 @@ export type CardBase = {
   photographer?: string;
   photo?: CardPhoto;
   renderKey?: string;
+  renderMeta?: RenderMeta;
   createdAt: string;
   updatedAt: string;
   statusCreatedAt?: string;
@@ -92,6 +136,8 @@ export type TournamentConfig = {
     positions?: string[];
     logoOverrideKey?: string;
   }>;
+  templates?: TemplateDefinition[];
+  defaultTemplates?: TemplateDefaults;
   createdAt: string;
   updatedAt: string;
 };

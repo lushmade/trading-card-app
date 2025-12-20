@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type MouseEvent } from 'react'
 import Cropper, { type Area, type MediaSize, type Point } from 'react-easy-crop'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
@@ -13,6 +13,7 @@ import {
   MAX_TEAM_LENGTH,
   MAX_TITLE_LENGTH,
   MAX_UPLOAD_BYTES,
+  resolveTemplateId,
   type ApiResponse,
   type Card,
   type CardType,
@@ -22,9 +23,10 @@ import {
   USQC_2025_CONFIG,
   USQC_2025_TOURNAMENT,
 } from 'shared'
-import { renderCard, renderCropBlob } from './renderCard'
+import { renderCard } from './renderCard'
 import { api, assetUrlForKey, media, writeHeaders } from './api'
 import { saveDraft, loadDraft, clearDraft, type SavedDraft } from './draftStorage'
+import CropGuides from './components/CropGuides'
 
 const ALLOWED_UPLOAD_TYPES: Set<string> = new Set(ALLOWED_UPLOAD_TYPES_LIST)
 const MAX_UPLOAD_RETRIES = 1
@@ -56,7 +58,6 @@ type UploadedPhoto = {
   publicUrl?: string
   width: number
   height: number
-  cropKey?: string
 }
 
 type SavePayload = {
@@ -77,7 +78,6 @@ type SavePayload = {
     width?: number
     height?: number
     crop?: CropRect
-    cropKey?: string
   }
 }
 
@@ -93,7 +93,7 @@ type PresignResponse = {
 }
 
 type UploadProgress = {
-  kind: 'original' | 'crop' | 'render'
+  kind: 'original'
   percent: number
 }
 
@@ -108,7 +108,7 @@ const initialForm: FormState = {
   title: '',
   caption: '',
   photographer: '',
-  templateId: 'classic',
+  templateId: '',
 }
 
 const clamp = (value: number, min: number, max: number) =>
@@ -203,7 +203,7 @@ async function updateCard(id: string, payload: SavePayload, editToken: string): 
 async function requestPresignFor(
   cardId: string,
   data: Blob,
-  kind: 'original' | 'crop' | 'render',
+  kind: 'original',
   editToken: string
 ): Promise<PresignResponse> {
   const res = await fetch(api('/uploads/presign'), {
@@ -308,11 +308,11 @@ async function uploadToS3(
   throw new Error('Upload failed')
 }
 
-async function submitCard(id: string, renderKey: string, editToken: string): Promise<Card> {
+async function submitCard(id: string, editToken: string): Promise<Card> {
   const res = await fetch(api(`/cards/${id}/submit`), {
     method: 'POST',
     headers: editHeadersFor(editToken),
-    body: JSON.stringify({ renderKey }),
+    body: JSON.stringify({}),
   })
 
   if (!res.ok) {
@@ -386,13 +386,14 @@ function App() {
   const [form, setForm] = useState<FormState>(initialForm)
   const [selectedTournamentId, setSelectedTournamentId] = useState('')
   const [photo, setPhoto] = useState<PhotoState | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [uploadedPhoto, setUploadedPhoto] = useState<UploadedPhoto | null>(null)
-  const [uploadedCropKey, setUploadedCropKey] = useState<string | null>(null)
   const [mediaSize, setMediaSize] = useState<MediaSize | null>(null)
   const [crop, setCrop] = useState<Point>({ x: 0, y: 0 })
   const [zoom, setZoom] = useState(1)
   const [rotation, setRotation] = useState<Rotation>(0)
   const [normalizedCrop, setNormalizedCrop] = useState<CropRect | null>(null)
+  const [showGuides, setShowGuides] = useState(true)
   const [cardId, setCardId] = useState<string | null>(null)
   const [editToken, setEditToken] = useState<string | null>(null)
   const [savedCard, setSavedCard] = useState<Card | null>(null)
@@ -403,7 +404,7 @@ function App() {
   const [renderedCardUrl, setRenderedCardUrl] = useState<string | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
-  const [submitStatus, setSubmitStatus] = useState<'idle' | 'rendering' | 'uploading' | 'submitting' | 'done' | 'error'>('idle')
+  const [submitStatus, setSubmitStatus] = useState<'idle' | 'submitting' | 'done' | 'error'>('idle')
   const [hasEdited, setHasEdited] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [pendingDraft, setPendingDraft] = useState<SavedDraft | null>(null)
@@ -448,6 +449,33 @@ function App() {
     () => tournamentConfig?.cardTypes.find((entry) => entry.type === form.cardType),
     [form.cardType, tournamentConfig]
   )
+  const templateOptions = useMemo(() => {
+    if (tournamentConfig?.templates && tournamentConfig.templates.length > 0) {
+      return tournamentConfig.templates
+    }
+    return [
+      { id: 'classic', label: 'Classic' },
+      { id: 'noir', label: 'Noir' },
+    ]
+  }, [tournamentConfig])
+
+  const defaultTemplateId = useMemo(
+    () =>
+      resolveTemplateId(
+        {
+          cardType: form.cardType || undefined,
+        },
+        tournamentConfig ?? undefined
+      ),
+    [form.cardType, tournamentConfig]
+  )
+
+  const defaultTemplateLabel = useMemo(
+    () => templateOptions.find((template) => template.id === defaultTemplateId)?.label ?? defaultTemplateId,
+    [defaultTemplateId, templateOptions]
+  )
+
+  const hasUnknownTemplate = Boolean(form.templateId) && !templateOptions.some((template) => template.id === form.templateId)
 
   const selectedTeam = useMemo(() => {
     if (!tournamentConfig) return null
@@ -486,8 +514,7 @@ function App() {
 
   const buildPhotoPayload = (
     source: UploadedPhoto | null,
-    cropValue: CropRect | null,
-    cropKey?: string | null
+    cropValue: CropRect | null
   ): SavePayload['photo'] | undefined => {
     if (!source && !cropValue) return undefined
 
@@ -501,10 +528,6 @@ function App() {
 
     if (cropValue) {
       payload.crop = cropValue
-    }
-
-    if (cropKey) {
-      payload.cropKey = cropKey
     }
 
     return payload
@@ -580,29 +603,6 @@ function App() {
       setUploadStatus('error')
       setUploadProgress(null)
       throw new Error('Photo upload failed. Please try again.')
-    }
-  }
-
-  const uploadCroppedPhoto = async (
-    currentCardId: string,
-    imageUrl: string,
-    currentEditToken: string
-  ) => {
-    if (!normalizedCrop) return null
-
-    setUploadProgress({ kind: 'crop', percent: 0 })
-    try {
-      const cropBlob = await renderCropBlob({ imageUrl, crop: normalizedCrop })
-      const presign = await requestPresignFor(currentCardId, cropBlob, 'crop', currentEditToken)
-      await uploadToS3(presign, cropBlob, (percent) =>
-        setUploadProgress({ kind: 'crop', percent })
-      )
-      setUploadedCropKey(presign.key)
-      return presign.key
-    } catch {
-      throw new Error('Crop upload failed. Please try again.')
-    } finally {
-      setUploadProgress(null)
     }
   }
 
@@ -714,13 +714,13 @@ function App() {
 
       if (photo && !uploadedPhoto) {
         const uploaded = await uploadOriginalPhoto(currentCardId, currentEditToken)
-        photoPayload = buildPhotoPayload(uploaded, normalizedCrop, uploadedCropKey)
+        photoPayload = buildPhotoPayload(uploaded, normalizedCrop)
       } else if (uploadedPhoto) {
         // Photo already uploaded, just update crop
-        photoPayload = buildPhotoPayload(uploadedPhoto, normalizedCrop, uploadedCropKey)
+        photoPayload = buildPhotoPayload(uploadedPhoto, normalizedCrop)
       } else if (normalizedCrop) {
         // Just crop, no photo
-        photoPayload = buildPhotoPayload(null, normalizedCrop, uploadedCropKey)
+        photoPayload = buildPhotoPayload(null, normalizedCrop)
       }
 
       if (photoPayload) {
@@ -789,62 +789,16 @@ function App() {
         throw new Error('Please set a crop before submitting')
       }
 
-      const uploadedUrl = uploaded.publicUrl ? media(uploaded.publicUrl) : null
-      const imageUrl = photo?.localUrl ?? uploadedUrl
-      if (!imageUrl) {
-        throw new Error('Photo source is unavailable. Please re-upload your photo.')
-      }
-      const cropKey = uploadedCropKey ?? (await uploadCroppedPhoto(currentCardId, imageUrl, currentEditToken))
-
-      const photoPayload = buildPhotoPayload(uploaded, normalizedCrop, cropKey)
+      const photoPayload = buildPhotoPayload(uploaded, normalizedCrop)
       if (photoPayload) {
         payload.photo = photoPayload
       }
 
       await updateCard(currentCardId, buildUpdatePayload(payload), currentEditToken)
 
-      // Step 1: Render the card
-      setSubmitStatus('rendering')
-      let blob: Blob
-      try {
-        const now = new Date().toISOString()
-        const cardForRender = buildCardForRender(now)
-        if (!cardForRender) {
-          throw new Error('Card type and tournament are required')
-        }
-        cardForRender.id = currentCardId
-
-        blob = await renderCard({
-          card: cardForRender,
-          config: tournamentConfig,
-          imageUrl,
-          resolveAssetUrl: assetUrlForKey,
-          templateId: form.templateId,
-        })
-      } catch {
-        throw new Error('Failed to render the card. Please try again.')
-      }
-
-      // Step 2: Upload rendered PNG
-      setSubmitStatus('uploading')
-      const presign = await requestPresignFor(currentCardId, blob, 'render', currentEditToken)
-      setUploadProgress({ kind: 'render', percent: 0 })
-      try {
-        await uploadToS3(presign, blob, (percent) =>
-          setUploadProgress({ kind: 'render', percent })
-        )
-      } catch {
-        throw new Error('Render upload failed. Please try again.')
-      } finally {
-        setUploadProgress(null)
-      }
-
-      // Step 3: Submit the card
+      // Submit the card
       setSubmitStatus('submitting')
-      const submitted = await submitCard(currentCardId, presign.key, currentEditToken)
-
-      // Store the rendered card URL for display
-      setRenderedCardUrl(assetUrlForKey(presign.key))
+      const submitted = await submitCard(currentCardId, currentEditToken)
       setSubmitStatus('done')
 
       return submitted
@@ -877,8 +831,6 @@ function App() {
     const errorMessage = error ?? (helloQuery.error instanceof Error ? helloQuery.error.message : null)
     if (errorMessage) return { message: errorMessage, tone: 'error' as const }
 
-    if (submitStatus === 'rendering') return { message: 'Rendering card...', tone: 'warning' as const }
-    if (submitStatus === 'uploading') return { message: 'Uploading render...', tone: 'warning' as const }
     if (submitStatus === 'submitting') return { message: 'Submitting card...', tone: 'warning' as const }
     if (submitStatus === 'done') return { message: 'Card submitted!', tone: 'success' as const }
 
@@ -917,18 +869,9 @@ function App() {
       : 'Saving...'
     : 'Save Draft'
 
-  const submitButtonLabel = submitMutation.isPending
-    ? submitStatus === 'rendering'
-      ? 'Rendering...'
-      : submitStatus === 'uploading'
-        ? 'Uploading...'
-        : submitStatus === 'submitting'
-          ? 'Submitting...'
-          : 'Submitting...'
-    : 'Submit Card'
+  const submitButtonLabel = submitMutation.isPending ? 'Submitting...' : 'Submit Card'
 
-  const isRenderInProgress =
-    submitStatus === 'rendering' || submitStatus === 'uploading' || submitStatus === 'submitting'
+  const isSubmitInProgress = submitStatus === 'submitting'
 
   const handleFieldChange = (key: keyof FormState) =>
     (event: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -1026,7 +969,6 @@ function App() {
       setPreviewError(null)
       setSubmitStatus('idle')
       setMediaSize(null)
-      setUploadedCropKey(null)
 
       // Reset crop
       setCrop({ x: 0, y: 0 })
@@ -1044,6 +986,23 @@ function App() {
     void handleFileSelect(file)
     event.target.value = ''
   }, [handleFileSelect])
+
+  const handleUploadClick = useCallback((event: MouseEvent<HTMLElement>) => {
+    event.preventDefault()
+    const input = fileInputRef.current
+    if (!input) {
+      return
+    }
+    try {
+      if ('showPicker' in input && typeof (input as HTMLInputElement & { showPicker?: () => void }).showPicker === 'function') {
+        ;(input as HTMLInputElement & { showPicker: () => void }).showPicker()
+      } else {
+        input.click()
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }, [])
 
   const handleDrop = useCallback((event: DragEvent<HTMLElement>) => {
     event.preventDefault()
@@ -1103,7 +1062,6 @@ function App() {
     setEditToken(null)
     setSavedCard(null)
     setUploadedPhoto(null)
-    setUploadedCropKey(null)
     setUploadStatus('idle')
     setUploadProgress(null)
     setRenderedCardUrl(null)
@@ -1130,7 +1088,7 @@ function App() {
     setForm((prev) => ({
       ...initialForm,
       tournamentId: selectedTournamentId,
-      templateId: prev.templateId || 'classic',
+      templateId: prev.templateId,
     }))
   }
 
@@ -1171,6 +1129,7 @@ function App() {
         status: savedCard?.status ?? 'draft',
         createdAt: savedCard?.createdAt ?? timestamp,
         updatedAt: timestamp,
+        templateId: toOptional(form.templateId),
         photographer: toOptional(form.photographer),
         photo: normalizedCrop ? { crop: normalizedCrop } : undefined,
         firstName: toOptional(form.firstName),
@@ -1193,6 +1152,7 @@ function App() {
       form.photographer,
       form.position,
       form.teamId,
+      form.templateId,
       form.title,
       form.tournamentId,
       normalizedCrop,
@@ -1223,7 +1183,7 @@ function App() {
           config: tournamentConfig,
           imageUrl: cropperImageUrl,
           resolveAssetUrl: assetUrlForKey,
-          templateId: form.templateId,
+          templateId: toOptional(form.templateId),
         })
         if (cancelled) return
         const url = URL.createObjectURL(blob)
@@ -1418,8 +1378,15 @@ function App() {
                     onChange={handleFieldChange('templateId')}
                     className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-white"
                   >
-                    <option value="classic">Classic</option>
-                    <option value="noir">Noir</option>
+                    <option value="">{`Default (${defaultTemplateLabel})`}</option>
+                    {hasUnknownTemplate ? (
+                      <option value={form.templateId}>{`Custom (${form.templateId})`}</option>
+                    ) : null}
+                    {templateOptions.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.label}
+                      </option>
+                    ))}
                   </select>
                 </label>
 
@@ -1598,6 +1565,7 @@ function App() {
                   className={`mt-3 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed px-6 py-8 text-center text-sm text-slate-300 transition ${
                     isDragging ? 'border-emerald-400/70 bg-emerald-500/10' : 'border-white/15 bg-slate-950/40'
                   }`}
+                  onClick={handleUploadClick}
                   onDrop={handleDrop}
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
@@ -1607,6 +1575,7 @@ function App() {
                     accept="image/jpeg,image/png,image/webp"
                     className="sr-only"
                     onChange={handleFileChange}
+                    ref={fileInputRef}
                   />
                   <div className="flex items-center gap-2 text-xs uppercase tracking-[0.3em] text-slate-400">
                     Drop photo here
@@ -1670,11 +1639,7 @@ function App() {
                         />
                       </div>
                       <span className="text-[11px] text-slate-400">
-                        {uploadProgress.kind === 'original'
-                          ? 'Photo'
-                          : uploadProgress.kind === 'crop'
-                            ? 'Crop'
-                            : 'Render'}{' '}
+                        Photo{' '}
                         {uploadProgress.percent}%
                       </span>
                     </div>
@@ -1727,17 +1692,17 @@ function App() {
                       className="w-full rounded-2xl shadow-lg"
                     />
                     <p className="mt-2 text-xs text-slate-400">
-                      Preview updates as you edit. Submit to generate the final PNG.
+                      Preview updates as you edit. Submit to send for rendering.
                     </p>
                   </div>
                 ) : (
                   <div className="mt-4">
                     <div className="flex aspect-[825/1125] w-full items-center justify-center rounded-2xl border border-dashed border-emerald-500/30 bg-slate-950/50 text-xs text-emerald-200/70">
-                      {isRenderInProgress ? (
+                      {isSubmitInProgress ? (
                         <div className="flex flex-col items-center gap-3 text-emerald-200/70">
                           <div className="h-10 w-10 animate-spin rounded-full border border-emerald-400/40 border-t-transparent" />
                           <span className="text-[11px] uppercase tracking-[0.2em]">
-                            Building render
+                            Submitting card
                           </span>
                         </div>
                       ) : previewError ? (
@@ -1782,6 +1747,7 @@ function App() {
                         Upload a photo to start cropping
                       </div>
                     )}
+                    <CropGuides visible={showGuides} />
                   </div>
                   {hasEdited && validationErrors.crop ? (
                     <p className="mt-2 text-xs text-rose-300">{validationErrors.crop}</p>
@@ -1809,6 +1775,13 @@ function App() {
                     className="rounded-full border border-white/15 px-3 py-1 text-xs text-white transition hover:border-white/40"
                   >
                     Reset
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowGuides((prev) => !prev)}
+                    className="rounded-full border border-white/15 px-3 py-1 text-xs text-white transition hover:border-white/40"
+                  >
+                    {showGuides ? 'Hide Guides' : 'Show Guides'}
                   </button>
                 </div>
               </div>

@@ -1,44 +1,59 @@
-import { CARD_HEIGHT, CARD_WIDTH, type Card, type CropRect, type TournamentConfig } from 'shared'
+import {
+  CARD_HEIGHT,
+  CARD_WIDTH,
+  findTemplate,
+  resolveTemplateId,
+  type Card,
+  type CropRect,
+  type RenderMeta,
+  type TemplateDefinition,
+  type TemplateFlags,
+  type TemplateTheme,
+  type TournamentConfig,
+} from 'shared'
 
 const FONT_SANS = '"Sora", "Avenir Next", "Helvetica Neue", system-ui, sans-serif'
 const FONT_DISPLAY = '"Fraunces", "Iowan Old Style", serif'
 
-type Theme = {
-  id: string
-  gradientStart: string
-  gradientEnd: string
-  border: string
-  accent: string
-  label: string
-  nameColor: string
-  meta: string
-  watermark: string
+const BASE_THEME: TemplateTheme = {
+  gradientStart: 'rgba(15, 23, 42, 0)',
+  gradientEnd: 'rgba(15, 23, 42, 0.85)',
+  border: 'rgba(255, 255, 255, 0.1)',
+  accent: 'rgba(255, 255, 255, 0.5)',
+  label: '#ffffff',
+  nameColor: '#ffffff',
+  meta: '#ffffff',
+  watermark: 'rgba(255, 255, 255, 0.12)',
 }
 
-const THEMES: Record<string, Theme> = {
+const FALLBACK_TEMPLATES: Record<string, TemplateDefinition> = {
   classic: {
     id: 'classic',
-    gradientStart: 'rgba(15, 23, 42, 0)',
-    gradientEnd: 'rgba(15, 23, 42, 0.85)',
-    border: 'rgba(255, 255, 255, 0.1)',
-    accent: 'rgba(255, 255, 255, 0.5)',
-    label: '#ffffff',
-    nameColor: '#ffffff',
-    meta: '#ffffff',
-    watermark: 'rgba(255, 255, 255, 0.12)',
+    label: 'Classic',
   },
   noir: {
     id: 'noir',
-    gradientStart: 'rgba(10, 10, 15, 0)',
-    gradientEnd: 'rgba(10, 10, 15, 0.92)',
-    border: 'rgba(255, 255, 255, 0.18)',
-    accent: 'rgba(255, 255, 255, 0.7)',
-    label: '#ffffff',
-    nameColor: '#ffffff',
-    meta: '#ffffff',
-    watermark: 'rgba(248, 250, 252, 0.2)',
+    label: 'Noir',
+    theme: {
+      gradientStart: 'rgba(10, 10, 15, 0)',
+      gradientEnd: 'rgba(10, 10, 15, 0.92)',
+      border: 'rgba(255, 255, 255, 0.18)',
+      accent: 'rgba(255, 255, 255, 0.7)',
+      label: '#ffffff',
+      nameColor: '#ffffff',
+      meta: '#ffffff',
+      watermark: 'rgba(248, 250, 252, 0.2)',
+    },
   },
 }
+
+const DEFAULT_TEMPLATE_FLAGS: TemplateFlags = {
+  showGradient: true,
+  showBorders: true,
+  showWatermarkJersey: true,
+}
+
+const overlayCache = new Map<string, Promise<HTMLImageElement | null>>()
 
 export type RenderCardInput = {
   card: Card
@@ -48,7 +63,34 @@ export type RenderCardInput = {
   templateId?: string
 }
 
-const getTheme = (templateId?: string) => THEMES[templateId ?? 'classic'] ?? THEMES.classic
+export const resolveTemplateSnapshot = (input: {
+  card: Card
+  config: TournamentConfig
+  templateId?: string
+}): { templateId: string; templateSnapshot: RenderMeta['templateSnapshot'] } => {
+  const effectiveTemplateId = resolveTemplateId(
+    { templateId: input.templateId ?? input.card.templateId, cardType: input.card.cardType },
+    input.config
+  )
+  const template =
+    findTemplate(input.config, effectiveTemplateId) ??
+    FALLBACK_TEMPLATES[effectiveTemplateId] ??
+    FALLBACK_TEMPLATES.classic
+
+  const theme = { ...BASE_THEME, ...(template.theme ?? {}) }
+  const flags = { ...DEFAULT_TEMPLATE_FLAGS, ...(template.flags ?? {}) }
+  const overlayPlacement = template.overlayPlacement ?? 'belowText'
+
+  return {
+    templateId: effectiveTemplateId,
+    templateSnapshot: {
+      overlayKey: template.overlayKey,
+      theme,
+      flags,
+      overlayPlacement,
+    },
+  }
+}
 
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -67,6 +109,19 @@ async function loadImageSafe(url?: string | null) {
   } catch {
     return null
   }
+}
+
+async function loadOverlay(
+  overlayKey: string | undefined,
+  resolveAssetUrl: (key: string) => string
+) {
+  if (!overlayKey) return null
+  const url = resolveAssetUrl(overlayKey)
+  const cached = overlayCache.get(url)
+  if (cached) return cached
+  const promise = loadImage(url).catch(() => null)
+  overlayCache.set(url, promise)
+  return promise
 }
 
 function drawCroppedImage(
@@ -217,7 +272,8 @@ export async function renderCropBlob(input: { imageUrl: string; crop: CropRect }
 
 export async function renderCard(input: RenderCardInput): Promise<Blob> {
   const { card, config, imageUrl, resolveAssetUrl, templateId } = input
-  const theme = getTheme(templateId)
+  const { templateSnapshot } = resolveTemplateSnapshot({ card, config, templateId })
+  const { theme, flags, overlayKey, overlayPlacement } = templateSnapshot
 
   if (document.fonts?.ready) {
     await document.fonts.ready
@@ -238,19 +294,31 @@ export async function renderCard(input: RenderCardInput): Promise<Blob> {
   const crop = card.photo?.crop ?? { x: 0, y: 0, w: 1, h: 1, rotateDeg: 0 }
   drawCroppedImage(ctx, img, crop, 0, 0, CARD_WIDTH, CARD_HEIGHT)
 
-  const overlayGradient = ctx.createLinearGradient(0, CARD_HEIGHT - 350, 0, CARD_HEIGHT)
-  overlayGradient.addColorStop(0, theme.gradientStart)
-  overlayGradient.addColorStop(1, theme.gradientEnd)
-  ctx.fillStyle = overlayGradient
-  ctx.fillRect(0, CARD_HEIGHT - 350, CARD_WIDTH, 350)
+  if (flags.showGradient) {
+    const overlayGradient = ctx.createLinearGradient(0, CARD_HEIGHT - 350, 0, CARD_HEIGHT)
+    overlayGradient.addColorStop(0, theme.gradientStart)
+    overlayGradient.addColorStop(1, theme.gradientEnd)
+    ctx.fillStyle = overlayGradient
+    ctx.fillRect(0, CARD_HEIGHT - 350, CARD_WIDTH, 350)
+  }
 
-  ctx.strokeStyle = theme.border
-  ctx.lineWidth = 2
-  ctx.strokeRect(20, 20, CARD_WIDTH - 40, CARD_HEIGHT - 40)
+  if (flags.showBorders) {
+    ctx.strokeStyle = theme.border
+    ctx.lineWidth = 2
+    ctx.strokeRect(20, 20, CARD_WIDTH - 40, CARD_HEIGHT - 40)
 
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)'
-  ctx.lineWidth = 1
-  ctx.strokeRect(30, 30, CARD_WIDTH - 60, CARD_HEIGHT - 60)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)'
+    ctx.lineWidth = 1
+    ctx.strokeRect(30, 30, CARD_WIDTH - 60, CARD_HEIGHT - 60)
+  }
+
+  const overlayImg = await loadOverlay(overlayKey, resolveAssetUrl)
+  if (overlayImg && overlayPlacement !== 'aboveText') {
+    if (overlayImg.naturalWidth !== CARD_WIDTH || overlayImg.naturalHeight !== CARD_HEIGHT) {
+      console.warn('Overlay is not 825x1125; scaling to fit.', overlayImg.naturalWidth, overlayImg.naturalHeight)
+    }
+    ctx.drawImage(overlayImg, 0, 0, CARD_WIDTH, CARD_HEIGHT)
+  }
 
   const cardLabel = getCardTypeLabel(card, config).toUpperCase()
   ctx.font = `13px ${FONT_SANS}`
@@ -272,7 +340,12 @@ export async function renderCard(input: RenderCardInput): Promise<Blob> {
     drawLogo(ctx, logoImg, CARD_WIDTH - 170, 40, 120, 80)
   }
 
-  if (card.cardType !== 'rare' && cardTypeConfig?.showJerseyNumber && card.jerseyNumber) {
+  if (
+    flags.showWatermarkJersey &&
+    card.cardType !== 'rare' &&
+    cardTypeConfig?.showJerseyNumber &&
+    card.jerseyNumber
+  ) {
     ctx.font = `bold 130px ${FONT_SANS}`
     ctx.fillStyle = theme.watermark
     ctx.textAlign = 'right'
@@ -331,6 +404,13 @@ export async function renderCard(input: RenderCardInput): Promise<Blob> {
     ctx.fillStyle = theme.label
     ctx.textAlign = 'right'
     drawOutlinedText(ctx, `Photo: ${card.photographer}`, CARD_WIDTH - 50, CARD_HEIGHT - 40, 2)
+  }
+
+  if (overlayImg && overlayPlacement === 'aboveText') {
+    if (overlayImg.naturalWidth !== CARD_WIDTH || overlayImg.naturalHeight !== CARD_HEIGHT) {
+      console.warn('Overlay is not 825x1125; scaling to fit.', overlayImg.naturalWidth, overlayImg.naturalHeight)
+    }
+    ctx.drawImage(overlayImg, 0, 0, CARD_WIDTH, CARD_HEIGHT)
   }
 
   return new Promise((resolve, reject) => {

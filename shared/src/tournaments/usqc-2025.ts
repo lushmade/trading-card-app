@@ -426,6 +426,29 @@ export const USQC_2025_CONFIG: TournamentConfig = {
       "positions": []
     }
   ],
+  "templates": [
+    {
+      "id": "classic",
+      "label": "Classic"
+    },
+    {
+      "id": "noir",
+      "label": "Noir",
+      "theme": {
+        "gradientStart": "rgba(10, 10, 15, 0)",
+        "gradientEnd": "rgba(10, 10, 15, 0.92)",
+        "border": "rgba(255, 255, 255, 0.18)",
+        "accent": "rgba(255, 255, 255, 0.7)",
+        "label": "#ffffff",
+        "nameColor": "#ffffff",
+        "meta": "#ffffff",
+        "watermark": "rgba(248, 250, 252, 0.2)"
+      }
+    }
+  ],
+  "defaultTemplates": {
+    "fallback": "classic"
+  },
   "createdAt": "2025-12-19T16:32:27.587Z",
   "updatedAt": "2025-12-19T16:32:27.587Z"
 }

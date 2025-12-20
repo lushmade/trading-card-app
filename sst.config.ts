@@ -27,13 +27,38 @@ export default $config({
       bucket: mediaBucket.name,
       rules: [
         {
-          id: "expire-uploads",
+          // Expire cropped images after 14 days - these are derived from originalKey + crop
+          // and are no longer used (cropKey is deprecated)
+          id: "expire-crop-uploads",
           status: "Enabled",
           filter: {
-            prefix: "uploads/",
+            prefix: "uploads/crop/",
           },
           expiration: {
             days: 14,
+          },
+        },
+        {
+          // Keep original photos for 2 years to support admin re-rendering
+          // Originals are canonical data needed to regenerate renders
+          id: "expire-original-uploads",
+          status: "Enabled",
+          filter: {
+            prefix: "uploads/original/",
+          },
+          expiration: {
+            days: 730,
+          },
+        },
+        {
+          // Renders are derived and can be regenerated, expire after 1 year
+          id: "expire-renders",
+          status: "Enabled",
+          filter: {
+            prefix: "renders/",
+          },
+          expiration: {
+            days: 365,
           },
         },
       ],
