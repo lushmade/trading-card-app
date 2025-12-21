@@ -142,6 +142,14 @@ draft → submitted → rendered
 - **Allowed types:** JPEG, PNG, WebP (render must be PNG)
 - **Card dimensions:** 825 x 1125 pixels
 
+## Print Guides & Preview
+
+- **Bleed (full card):** 825 x 1125 (render canvas)
+- **Trim (red guide):** 750 x 1050 — used as the canonical preview area for submitters
+- **Safe (blue guide):** 675 x 975 — shown in the admin template preview only
+
+The submitter cropper shows the red trim guide, and the live preview renders only the trim area (trim-aspect output). The admin template preview overlays the blue safe guide inside the trim frame.
+
 ## Configuration
 
 ### Environment Variables
