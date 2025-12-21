@@ -1,6 +1,7 @@
 import {
   CARD_HEIGHT,
   CARD_WIDTH,
+  SAFE_BOX,
   TRIM_BOX,
   findTemplate,
   resolveTemplateId,
@@ -15,6 +16,25 @@ import {
 
 const FONT_SANS = '"Sora", "Avenir Next", "Helvetica Neue", system-ui, sans-serif'
 const FONT_DISPLAY = '"Fraunces", "Iowan Old Style", serif'
+
+// Layout constants derived from SAFE_BOX - all content positioned within safe zone
+// to ensure visibility in trim preview and survival after physical cutting
+const LAYOUT = {
+  // Horizontal positioning
+  left: SAFE_BOX.x, // 75px from left edge
+  right: CARD_WIDTH - SAFE_BOX.x, // 750px from left (75px from right edge)
+  centerX: CARD_WIDTH / 2,
+  contentWidth: SAFE_BOX.w, // 675px usable width
+
+  // Vertical positioning
+  top: SAFE_BOX.y, // 75px from top edge
+  bottom: CARD_HEIGHT - SAFE_BOX.y, // 1050px from top (75px from bottom edge)
+  centerY: CARD_HEIGHT / 2,
+
+  // Logo dimensions
+  logoMaxW: 120,
+  logoMaxH: 80,
+}
 
 const BASE_THEME: TemplateTheme = {
   gradientStart: 'rgba(15, 23, 42, 0)',
@@ -318,7 +338,7 @@ async function renderCardFrame(
   ctx.font = `13px ${FONT_SANS}`
   ctx.fillStyle = theme.label
   ctx.textAlign = 'left'
-  fillTextWithLetterSpacing(ctx, cardLabel, 50, 45, 2.5)
+  fillTextWithLetterSpacing(ctx, cardLabel, LAYOUT.left, LAYOUT.top + 13, 2.5)
 
   const cardTypeConfig = getCardTypeConfig(card, config)
   const team = getTeamInfo(card, config)
@@ -331,7 +351,7 @@ async function renderCardFrame(
 
   const logoImg = await loadImageSafe(logoKey ? resolveAssetUrl(logoKey) : null)
   if (logoImg) {
-    drawLogo(ctx, logoImg, CARD_WIDTH - 170, 40, 120, 80)
+    drawLogo(ctx, logoImg, LAYOUT.right - LAYOUT.logoMaxW, LAYOUT.top, LAYOUT.logoMaxW, LAYOUT.logoMaxH)
   }
 
   if (
@@ -343,7 +363,7 @@ async function renderCardFrame(
     ctx.font = `bold 130px ${FONT_SANS}`
     ctx.fillStyle = theme.watermark
     ctx.textAlign = 'left'
-    ctx.fillText(card.jerseyNumber, 50, 155)
+    ctx.fillText(card.jerseyNumber, LAYOUT.left, LAYOUT.top + 100)
   }
 
   if (card.cardType === 'rare') {
@@ -353,43 +373,43 @@ async function renderCardFrame(
     ctx.strokeStyle = theme.accent
     ctx.lineWidth = 1
     ctx.beginPath()
-    ctx.moveTo(120, CARD_HEIGHT / 2 - 40)
-    ctx.lineTo(CARD_WIDTH - 120, CARD_HEIGHT / 2 - 40)
+    ctx.moveTo(LAYOUT.left, LAYOUT.centerY - 40)
+    ctx.lineTo(LAYOUT.right, LAYOUT.centerY - 40)
     ctx.stroke()
     ctx.beginPath()
-    ctx.moveTo(120, CARD_HEIGHT / 2 + 40)
-    ctx.lineTo(CARD_WIDTH - 120, CARD_HEIGHT / 2 + 40)
+    ctx.moveTo(LAYOUT.left, LAYOUT.centerY + 40)
+    ctx.lineTo(LAYOUT.right, LAYOUT.centerY + 40)
     ctx.stroke()
 
-    const titleSize = fitText(ctx, title, CARD_WIDTH - 200, 52, 28, FONT_DISPLAY)
+    const titleSize = fitText(ctx, title, LAYOUT.contentWidth, 52, 28, FONT_DISPLAY)
     ctx.font = `bold ${titleSize}px ${FONT_DISPLAY}`
     ctx.fillStyle = theme.nameColor
     ctx.textAlign = 'center'
-    drawOutlinedText(ctx, title, CARD_WIDTH / 2, CARD_HEIGHT / 2 - 5, 4)
+    drawOutlinedText(ctx, title, LAYOUT.centerX, LAYOUT.centerY - 5, 4)
 
     if (caption) {
       ctx.font = `20px ${FONT_SANS}`
       ctx.fillStyle = theme.meta
-      drawOutlinedText(ctx, caption, CARD_WIDTH / 2, CARD_HEIGHT / 2 + 30, 2)
+      drawOutlinedText(ctx, caption, LAYOUT.centerX, LAYOUT.centerY + 30, 2)
     }
   } else {
     const fullName = [card.firstName, card.lastName].filter(Boolean).join(' ').trim()
     const nameText = fullName || 'Player Name'
-    const nameFontSize = fitText(ctx, nameText, CARD_WIDTH - 100, 56, 34, FONT_DISPLAY)
+    const nameFontSize = fitText(ctx, nameText, LAYOUT.contentWidth, 56, 34, FONT_DISPLAY)
     ctx.fillStyle = theme.nameColor
     ctx.textAlign = 'left'
     ctx.font = `bold ${nameFontSize}px ${FONT_DISPLAY}`
-    drawOutlinedText(ctx, nameText, 50, CARD_HEIGHT - 180, 4)
+    drawOutlinedText(ctx, nameText, LAYOUT.left, LAYOUT.bottom - 145, 4)
 
     const positionTeam = [card.position, team?.name].filter(Boolean).join(' / ')
     ctx.font = `28px ${FONT_SANS}`
     ctx.fillStyle = theme.meta
-    drawOutlinedText(ctx, positionTeam || 'Position / Team', 50, CARD_HEIGHT - 130, 2)
+    drawOutlinedText(ctx, positionTeam || 'Position / Team', LAYOUT.left, LAYOUT.bottom - 95, 2)
 
     if (cardTypeConfig?.showJerseyNumber && card.jerseyNumber) {
       ctx.font = `bold 36px ${FONT_SANS}`
       ctx.fillStyle = theme.meta
-      drawOutlinedText(ctx, `#${card.jerseyNumber}`, 50, CARD_HEIGHT - 80, 3)
+      drawOutlinedText(ctx, `#${card.jerseyNumber}`, LAYOUT.left, LAYOUT.bottom - 45, 3)
     }
   }
 
@@ -397,7 +417,7 @@ async function renderCardFrame(
     ctx.font = `18px ${FONT_SANS}`
     ctx.fillStyle = theme.label
     ctx.textAlign = 'right'
-    drawOutlinedText(ctx, `Photo: ${card.photographer}`, CARD_WIDTH - 50, CARD_HEIGHT - 40, 2)
+    drawOutlinedText(ctx, `Photo: ${card.photographer}`, LAYOUT.right, LAYOUT.bottom - 5, 2)
   }
 
   if (overlayImg && overlayPlacement === 'aboveText') {

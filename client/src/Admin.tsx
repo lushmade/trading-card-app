@@ -112,6 +112,8 @@ export default function Admin() {
   const [bundleFile, setBundleFile] = useState<File | null>(null)
   const [bundleResult, setBundleResult] = useState<BundleImportResult | null>(null)
   const [renderingCardId, setRenderingCardId] = useState<string | null>(null)
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
 
   // Save password to sessionStorage when it changes
   useEffect(() => {
@@ -424,6 +426,29 @@ export default function Admin() {
       return res.json()
     },
     onSuccess: () => {
+      setPendingDeleteId(null)
+      queryClient.invalidateQueries({ queryKey: ['admin-cards', statusFilter, activeTournamentId] })
+    },
+  })
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const results = await Promise.allSettled(
+        ids.map(async (id) => {
+          const res = await fetch(api(`/admin/cards/${id}`), {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${adminPassword}` },
+          })
+          if (!res.ok) throw new Error('Delete failed')
+          return id
+        })
+      )
+      const deleted = results.filter((r) => r.status === 'fulfilled').length
+      const failed = results.filter((r) => r.status === 'rejected').length
+      return { deleted, failed }
+    },
+    onSuccess: () => {
+      setShowBulkDeleteConfirm(false)
       queryClient.invalidateQueries({ queryKey: ['admin-cards', statusFilter, activeTournamentId] })
     },
   })
@@ -848,8 +873,76 @@ export default function Admin() {
                 <option value="submitted">Submitted</option>
                 <option value="rendered">Rendered</option>
               </select>
+              {statusFilter === 'draft' && cardsQuery.data && cardsQuery.data.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowBulkDeleteConfirm(true)}
+                  className="rounded-full border border-rose-500/40 px-3 py-1 text-xs text-rose-300 hover:border-rose-500/60"
+                >
+                  Delete All ({cardsQuery.data.length})
+                </button>
+              )}
             </div>
           </div>
+
+          {/* Bulk Delete Confirmation Dialog */}
+          {showBulkDeleteConfirm && cardsQuery.data && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+              <div className="mx-4 w-full max-w-md rounded-2xl border border-white/10 bg-slate-900 p-6">
+                <h3 className="text-lg font-semibold text-white">Delete All Drafts?</h3>
+                <p className="mt-2 text-sm text-slate-400">
+                  This will permanently delete {cardsQuery.data.length} draft card{cardsQuery.data.length === 1 ? '' : 's'}. This action cannot be undone.
+                </p>
+                <div className="mt-6 flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkDeleteConfirm(false)}
+                    className="rounded-full border border-white/20 px-4 py-2 text-sm text-white hover:border-white/40"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => bulkDeleteMutation.mutate(cardsQuery.data.map((c) => c.id))}
+                    disabled={bulkDeleteMutation.isPending}
+                    className="rounded-full bg-rose-500 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-50"
+                  >
+                    {bulkDeleteMutation.isPending ? 'Deleting...' : 'Delete All'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Single Delete Confirmation Dialog */}
+          {pendingDeleteId && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+              <div className="mx-4 w-full max-w-md rounded-2xl border border-white/10 bg-slate-900 p-6">
+                <h3 className="text-lg font-semibold text-white">Delete Draft?</h3>
+                <p className="mt-2 text-sm text-slate-400">
+                  This will permanently delete this draft card. This action cannot be undone.
+                </p>
+                <div className="mt-6 flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setPendingDeleteId(null)}
+                    className="rounded-full border border-white/20 px-4 py-2 text-sm text-white hover:border-white/40"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteMutation.mutate(pendingDeleteId)}
+                    disabled={deleteMutation.isPending}
+                    className="rounded-full bg-rose-500 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-50"
+                  >
+                    {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {renderMutation.isError && (
             <p className="mt-2 text-xs text-rose-400">
               {renderMutation.error instanceof Error ? renderMutation.error.message : 'Render failed'}
@@ -924,8 +1017,8 @@ export default function Admin() {
                     {card.status === 'draft' ? (
                       <button
                         type="button"
-                        onClick={() => deleteMutation.mutate(card.id)}
-                        className="rounded-full border border-rose-500/40 px-3 py-1 text-[11px] text-rose-300"
+                        onClick={() => setPendingDeleteId(card.id)}
+                        className="rounded-full border border-rose-500/40 px-3 py-1 text-[11px] text-rose-300 hover:border-rose-500/60"
                       >
                         Delete Draft
                       </button>

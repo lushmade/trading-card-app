@@ -97,9 +97,11 @@ export default $config({
     });
     router.routeBucket("/r", mediaBucket, {
       rewrite: { regex: "^/r/(.*)$", to: "/renders/$1" },
+      cors: true,
     });
     router.routeBucket("/c", mediaBucket, {
       rewrite: { regex: "^/c/(.*)$", to: "/config/$1" },
+      cors: true,
     });
 
     const web = new sst.aws.StaticSite("Web", {

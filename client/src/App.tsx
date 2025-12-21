@@ -410,6 +410,7 @@ function App() {
   const [hasEdited, setHasEdited] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [pendingDraft, setPendingDraft] = useState<SavedDraft | null>(null)
+  const [teamSearch, setTeamSearch] = useState('')
 
   const helloQuery = useQuery({
     queryKey: ['hello'],
@@ -483,6 +484,15 @@ function App() {
     if (!tournamentConfig) return null
     return tournamentConfig.teams.find((team) => team.id === form.teamId) ?? null
   }, [form.teamId, tournamentConfig])
+
+  const filteredTeams = useMemo(() => {
+    if (!tournamentConfig?.teams) return []
+    if (!teamSearch.trim()) return tournamentConfig.teams
+    const search = teamSearch.toLowerCase().trim()
+    return tournamentConfig.teams.filter((team) =>
+      team.name.toLowerCase().includes(search)
+    )
+  }, [tournamentConfig?.teams, teamSearch])
 
   useEffect(() => {
     if (!cardTypeConfig?.positions || cardTypeConfig.positions.length === 0) return
@@ -1279,7 +1289,9 @@ function App() {
                   <option value="">Select tournament</option>
                   {tournamentsQuery.data.map((tournament) => (
                     <option key={tournament.id} value={tournament.id}>
-                      {tournament.name} {tournament.year}
+                      {tournament.name.includes(String(tournament.year))
+                        ? tournament.name
+                        : `${tournament.name} ${tournament.year}`}
                     </option>
                   ))}
                 </select>
@@ -1431,13 +1443,23 @@ function App() {
                     {cardTypeConfig?.showTeamField ? (
                       <label className="text-xs uppercase tracking-wide text-slate-400">
                         Team <span className="text-rose-400">*</span>
+                        <input
+                          type="text"
+                          value={teamSearch}
+                          onChange={(e) => setTeamSearch(e.target.value)}
+                          placeholder="Search teams..."
+                          className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-white placeholder:text-slate-500"
+                        />
                         <select
                           value={form.teamId}
-                          onChange={handleFieldChange('teamId')}
+                          onChange={(e) => {
+                            handleFieldChange('teamId')(e)
+                            setTeamSearch('')
+                          }}
                           className={inputClass(hasEdited && Boolean(validationErrors.teamId))}
                         >
-                          <option value="">Select team</option>
-                          {tournamentConfig?.teams.map((team) => (
+                          <option value="">Select team{teamSearch ? ` (${filteredTeams.length} matches)` : ''}</option>
+                          {filteredTeams.map((team) => (
                             <option key={team.id} value={team.id}>
                               {team.name}
                             </option>
