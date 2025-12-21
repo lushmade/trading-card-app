@@ -125,6 +125,21 @@ async function loadOverlay(
   return promise
 }
 
+function drawOverlay(
+  ctx: CanvasRenderingContext2D,
+  overlayImg: HTMLImageElement,
+  overlayKey: string | undefined
+) {
+  if (overlayImg.naturalWidth !== CARD_WIDTH || overlayImg.naturalHeight !== CARD_HEIGHT) {
+    throw new Error(
+      `Overlay "${overlayKey}" must be exactly ${CARD_WIDTH}x${CARD_HEIGHT}px, ` +
+      `but is ${overlayImg.naturalWidth}x${overlayImg.naturalHeight}px. ` +
+      `Mismatched dimensions will cause distortion.`
+    )
+  }
+  ctx.drawImage(overlayImg, 0, 0, CARD_WIDTH, CARD_HEIGHT)
+}
+
 function drawCroppedImage(
   ctx: CanvasRenderingContext2D,
   img: HTMLImageElement,
@@ -296,10 +311,7 @@ async function renderCardFrame(
 
   const overlayImg = await loadOverlay(overlayKey, resolveAssetUrl)
   if (overlayImg && overlayPlacement !== 'aboveText') {
-    if (overlayImg.naturalWidth !== CARD_WIDTH || overlayImg.naturalHeight !== CARD_HEIGHT) {
-      console.warn('Overlay is not 825x1125; scaling to fit.', overlayImg.naturalWidth, overlayImg.naturalHeight)
-    }
-    ctx.drawImage(overlayImg, 0, 0, CARD_WIDTH, CARD_HEIGHT)
+    drawOverlay(ctx, overlayImg, overlayKey)
   }
 
   const cardLabel = getCardTypeLabel(card, config).toUpperCase()
@@ -389,10 +401,7 @@ async function renderCardFrame(
   }
 
   if (overlayImg && overlayPlacement === 'aboveText') {
-    if (overlayImg.naturalWidth !== CARD_WIDTH || overlayImg.naturalHeight !== CARD_HEIGHT) {
-      console.warn('Overlay is not 825x1125; scaling to fit.', overlayImg.naturalWidth, overlayImg.naturalHeight)
-    }
-    ctx.drawImage(overlayImg, 0, 0, CARD_WIDTH, CARD_HEIGHT)
+    drawOverlay(ctx, overlayImg, overlayKey)
   }
 }
 
