@@ -812,6 +812,8 @@ export default function Admin() {
             config={activeConfig}
             onChange={(next) => setConfigDraft(JSON.stringify(next, null, 2))}
             uploadOverlay={uploadOverlay}
+            onSave={() => saveConfigMutation.mutate()}
+            isSaving={saveConfigMutation.isPending}
           />
         ) : (
           <section className="rounded-3xl border border-white/10 bg-white/5 p-6 text-xs text-slate-400">
