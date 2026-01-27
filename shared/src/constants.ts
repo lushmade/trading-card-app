@@ -75,17 +75,19 @@ export const USQC26_LAYOUT = {
     rotation: -6, // degrees
     firstNameBox: {
       width: 1000,
-      height: 50,
+      height: 46,
       borderWidth: 3,
+      strokeWidth: 8,
     },
     lastNameBox: {
       width: 1000,
       height: 80,
       borderWidth: 3,
+      strokeWidth: 8,
     },
     // Anchor point for name section (right edge of last name)
     anchorX: 754,
-    anchorY: 855,
+    anchorY: 844,
     // Font sizes
     firstNameSize: 43,
     lastNameSize: 60,
@@ -93,6 +95,11 @@ export const USQC26_LAYOUT = {
       firstName: 4.3,
       lastName: 6,
     },
+    // Text padding and positioning
+    leftPadding: 8,
+    rightPadding: 8,
+    boxExtension: 100, // Extra width to extend boxes past frame edge
+    textYOffset: 2, // Offset to lower text baseline
   },
   // Event indicator badge
   eventBadge: {
@@ -103,16 +110,19 @@ export const USQC26_LAYOUT = {
     borderRadius: 6,
     borderWidth: 2,
     fontSize: 17,
+    textYOffset: 1,
   },
   // Position and number (top-right)
   positionNumber: {
-    centerX: 697,
-    positionY: 120,
-    numberY: 169,
+    centerX: 698,
+    topY: 111,
     positionFontSize: 24,
-    numberFontSize: 84,
+    numberFontSize: 85,
     positionLetterSpacing: 1.92,
     numberLetterSpacing: -1.68,
+    positionStrokeWidth: 5,
+    numberStrokeWidth: 8,
+    numberXOffset: -2,
   },
   // Team logo
   teamLogo: {
@@ -125,7 +135,8 @@ export const USQC26_LAYOUT = {
   bottomBar: {
     y: 1036,
     height: 26,
-    cameraIcon: { x: 75, y: 1041, width: 22, height: 15 },
+    textYOffset: 14,
+    cameraIcon: { x: 74, y: 1040, width: 22, height: 15 },
     photographerX: 107,
     rarityX: 403,
     raritySize: 20,

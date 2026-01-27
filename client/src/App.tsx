@@ -632,7 +632,8 @@ function App() {
       | 'caption'
       | 'photo'
       | 'crop'
-      | 'jerseyNumber',
+      | 'jerseyNumber'
+      | 'photographer',
       string
     >> = {}
 
@@ -695,6 +696,13 @@ function App() {
     if (!hasPhoto) errors.photo = 'Photo is required'
     if (!normalizedCrop) errors.crop = 'Crop is required'
 
+    const photographer = form.photographer.trim()
+    if (!photographer) {
+      errors.photographer = 'Photo credit is required'
+    } else if (photographer.length > MAX_PHOTOGRAPHER_LENGTH) {
+      errors.photographer = `Photo credit must be ${MAX_PHOTOGRAPHER_LENGTH} characters or fewer`
+    }
+
     return errors
   }, [
     form.caption,
@@ -702,6 +710,7 @@ function App() {
     form.firstName,
     form.jerseyNumber,
     form.lastName,
+    form.photographer,
     form.position,
     form.teamId,
     form.title,
@@ -1570,14 +1579,19 @@ function App() {
                 )}
 
                 <label className="text-xs uppercase tracking-wide text-slate-400 sm:col-span-2">
-                  Photo Credit
+                  Photo Credit <span className="text-rose-400">*</span>
                   <input
                     value={form.photographer}
                     onChange={handleFieldChange('photographer')}
                     maxLength={MAX_PHOTOGRAPHER_LENGTH}
-                    className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-white"
+                    className={inputClass(hasEdited && Boolean(validationErrors.photographer))}
                     placeholder="Paul Schiopu"
                   />
+                  {hasEdited && validationErrors.photographer ? (
+                    <span className="mt-1 block text-[11px] text-rose-400">
+                      {validationErrors.photographer}
+                    </span>
+                  ) : null}
                 </label>
               </form>
 
