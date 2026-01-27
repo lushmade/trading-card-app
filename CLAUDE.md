@@ -185,3 +185,18 @@ logger.info("Upload complete", { cardId });
 logger.warn("Retrying upload", { attempt });
 logger.error("Upload failed", { error: String(error) });
 ```
+
+## Tech Debt & Workarounds
+
+1. **Hybrid Deployment** - Frontend deploys from austin-site, backend from this repo. Remember to deploy both when making full-stack changes.
+
+2. **Symlinks in austin-site** - The `apps/trading-cards/` directory in austin-site symlinks to this repo. Changes here are picked up by austin-site builds.
+
+3. **CORS Wildcard** - Lambda Function URL uses `allowMethods: ["*"]` because AWS has a 6-character limit per method (OPTIONS is 7 chars).
+
+4. **Base Path for Production** - When building for production via austin-site, `VITE_BASE_PATH=/trading-cards` must be set. The TanStack Router `basepath` in `client/src/router.tsx` reads this at build time.
+
+5. **CloudFront Cache** - After deploying austin-site, you may need to invalidate CloudFront cache if changes don't appear:
+   ```bash
+   AWS_PROFILE=prod aws cloudfront create-invalidation --distribution-id E1JQ3CFBKJU5SV --paths "/trading-cards/*"
+   ```
