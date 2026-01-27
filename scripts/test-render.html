@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Card Render Test</title>
+  <style>
+    @font-face {
+      font-family: 'Amifer';
+      src: url('../client/src/assets/fonts/Amifer-Medium.otf') format('opentype');
+      font-weight: 500;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Amifer';
+      src: url('../client/src/assets/fonts/Amifer-MediumItalic.otf') format('opentype');
+      font-weight: 500;
+      font-style: italic;
+    }
+    @font-face {
+      font-family: 'Amifer';
+      src: url('../client/src/assets/fonts/Amifer-Bold.otf') format('opentype');
+      font-weight: 700;
+      font-style: normal;
+    }
+    body {
+      font-family: sans-serif;
+      background: #1a1a1a;
+      color: white;
+      padding: 20px;
+    }
+    .card-container {
+      display: inline-block;
+      margin: 10px;
+    }
+    canvas {
+      border: 1px solid #333;
+    }
+    h2 {
+      margin: 5px 0;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <h1>USQC26 Card Render Test</h1>
+  <div id="cards"></div>
+
+  <script type="module">
+    // Constants
+    const CARD_WIDTH = 825;
+    const CARD_HEIGHT = 1125;
+    const FONT_AMIFER = '"Amifer", "Avenir Next", "Helvetica Neue", sans-serif';
+
+    const USQC26_COLORS = {
+      primary: '#1b4278',
+      secondary: '#c8d7e9',
+      white: '#ffffff',
+      numberOverlay: 'rgba(255, 255, 255, 0.67)',
+    };
+
+    const FRAME = {
+      innerX: 56,
+      innerY: 91,
+      innerWidth: 713,
+      innerHeight: 937,
+      innerRadius: 29,
+    };
+
+    const LAYOUT = {
+      name: {
+        rotation: -6,
+        firstNameBox: { width: 1000, height: 50, borderWidth: 3 },
+        lastNameBox: { width: 1000, height: 80, borderWidth: 3 },
+        anchorX: 754,
+        anchorY: 855,
+        firstNameSize: 43,
+        lastNameSize: 60,
+      },
+      eventBadge: { x: 679, y: 64, width: 76, height: 20, borderRadius: 6, borderWidth: 2, fontSize: 17 },
+      positionNumber: { centerX: 697, positionY: 120, numberY: 169, positionFontSize: 24, numberFontSize: 84 },
+      teamLogo: { x: 75, y: 64, maxWidth: 101, maxHeight: 100 },
+      bottomBar: { y: 1036, height: 26, cameraIcon: { x: 75, y: 1041, width: 22, height: 15 }, photographerX: 107, rarityX: 403, raritySize: 20, teamNameX: 750, fontSize: 20 },
+    };
+
+    function roundedRect(ctx, x, y, width, height, radius) {
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + width - radius, y);
+      ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+      ctx.lineTo(x + width, y + height - radius);
+      ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+      ctx.lineTo(x + radius, y + height);
+      ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+      ctx.lineTo(x, y + radius);
+      ctx.quadraticCurveTo(x, y, x + radius, y);
+      ctx.closePath();
+    }
+
+    function drawFrame(ctx) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, CARD_WIDTH, CARD_HEIGHT);
+      const { innerX, innerY, innerWidth, innerHeight, innerRadius } = FRAME;
+      ctx.moveTo(innerX + innerRadius, innerY);
+      ctx.lineTo(innerX + innerWidth - innerRadius, innerY);
+      ctx.quadraticCurveTo(innerX + innerWidth, innerY, innerX + innerWidth, innerY + innerRadius);
+      ctx.lineTo(innerX + innerWidth, innerY + innerHeight - innerRadius);
+      ctx.quadraticCurveTo(innerX + innerWidth, innerY + innerHeight, innerX + innerWidth - innerRadius, innerY + innerHeight);
+      ctx.lineTo(innerX + innerRadius, innerY + innerHeight);
+      ctx.quadraticCurveTo(innerX, innerY + innerHeight, innerX, innerY + innerHeight - innerRadius);
+      ctx.lineTo(innerX, innerY + innerRadius);
+      ctx.quadraticCurveTo(innerX, innerY, innerX + innerRadius, innerY);
+      ctx.closePath();
+      ctx.fillStyle = USQC26_COLORS.white;
+      ctx.fill('evenodd');
+      ctx.restore();
+    }
+
+    function drawEventBadge(ctx, text) {
+      const { x, y, width, height, borderRadius, borderWidth, fontSize } = LAYOUT.eventBadge;
+      ctx.save();
+      roundedRect(ctx, x, y, width, height, borderRadius);
+      ctx.fillStyle = USQC26_COLORS.secondary;
+      ctx.fill();
+      ctx.strokeStyle = USQC26_COLORS.primary;
+      ctx.lineWidth = borderWidth;
+      ctx.stroke();
+      ctx.font = `700 ${fontSize}px ${FONT_AMIFER}`;
+      ctx.fillStyle = USQC26_COLORS.primary;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, x + width / 2, y + height / 2);
+      ctx.restore();
+    }
+
+    function drawPositionNumber(ctx, position, number) {
+      const { centerX, positionY, numberY, positionFontSize, numberFontSize } = LAYOUT.positionNumber;
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `500 ${positionFontSize}px ${FONT_AMIFER}`;
+      ctx.fillStyle = USQC26_COLORS.primary;
+      ctx.fillText(position.toUpperCase(), centerX, positionY);
+      ctx.font = `500 ${numberFontSize}px ${FONT_AMIFER}`;
+      ctx.fillStyle = USQC26_COLORS.numberOverlay;
+      ctx.fillText(number, centerX, numberY);
+      ctx.restore();
+    }
+
+    function drawAngledNameBoxes(ctx, firstName, lastName) {
+      const { rotation, firstNameBox, lastNameBox, firstNameSize, lastNameSize } = LAYOUT.name;
+      const radians = (rotation * Math.PI) / 180;
+
+      // Anchor point - boxes extend to the RIGHT (off the card)
+      const anchorX = 500;
+      const anchorY = 870;
+
+      ctx.save();
+      ctx.translate(anchorX, anchorY);
+      ctx.rotate(radians);
+
+      // Draw last name box (white with light blue border) - extends right
+      const lnBoxY = -lastNameBox.height / 2;
+      ctx.fillStyle = USQC26_COLORS.white;
+      ctx.fillRect(0, lnBoxY, lastNameBox.width, lastNameBox.height);
+      ctx.strokeStyle = USQC26_COLORS.secondary;
+      ctx.lineWidth = lastNameBox.borderWidth;
+      ctx.strokeRect(0, lnBoxY, lastNameBox.width, lastNameBox.height);
+
+      // Draw last name text (white with dark outline for visibility)
+      ctx.font = `500 italic ${lastNameSize}px ${FONT_AMIFER}`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      const textPadding = 16;
+      // Draw outline first
+      ctx.strokeStyle = USQC26_COLORS.primary;
+      ctx.lineWidth = 2;
+      ctx.strokeText(lastName.toUpperCase(), textPadding, 0);
+      // Then fill with white
+      ctx.fillStyle = USQC26_COLORS.white;
+      ctx.fillText(lastName.toUpperCase(), textPadding, 0);
+
+      // Draw first name box (light blue with white border)
+      const fnBoxY = lnBoxY - firstNameBox.height - 8;
+      ctx.fillStyle = USQC26_COLORS.secondary;
+      ctx.fillRect(0, fnBoxY, firstNameBox.width, firstNameBox.height);
+      ctx.strokeStyle = USQC26_COLORS.white;
+      ctx.lineWidth = firstNameBox.borderWidth;
+      ctx.strokeRect(0, fnBoxY, firstNameBox.width, firstNameBox.height);
+
+      // Draw first name text (dark blue)
+      ctx.font = `500 italic ${firstNameSize}px ${FONT_AMIFER}`;
+      ctx.fillStyle = USQC26_COLORS.primary;
+      ctx.textAlign = 'left';
+      const fnTextY = fnBoxY + firstNameBox.height / 2;
+      ctx.fillText(firstName.toUpperCase(), textPadding, fnTextY);
+
+      ctx.restore();
+    }
+
+    function drawBottomBar(ctx, photographer, teamName) {
+      const { y, cameraIcon, photographerX, rarityX, raritySize, teamNameX, fontSize } = LAYOUT.bottomBar;
+      const textY = y + 13;
+
+      ctx.save();
+      ctx.font = `500 ${fontSize}px ${FONT_AMIFER}`;
+      ctx.textBaseline = 'middle';
+
+      // Camera icon
+      ctx.fillStyle = USQC26_COLORS.primary;
+      roundedRect(ctx, cameraIcon.x, cameraIcon.y, cameraIcon.width, cameraIcon.height, 2);
+      ctx.fill();
+
+      // Photographer
+      ctx.fillStyle = USQC26_COLORS.primary;
+      ctx.textAlign = 'left';
+      ctx.fillText(photographer.toUpperCase(), photographerX, textY);
+
+      // Rarity circle
+      ctx.beginPath();
+      ctx.arc(rarityX + raritySize / 2, y + 13, raritySize / 2, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Team name
+      ctx.textAlign = 'right';
+      ctx.fillText(teamName.toUpperCase(), teamNameX, textY);
+
+      ctx.restore();
+    }
+
+    async function renderTestCard(cardData) {
+      const canvas = document.createElement('canvas');
+      canvas.width = CARD_WIDTH;
+      canvas.height = CARD_HEIGHT;
+      const ctx = canvas.getContext('2d');
+
+      // Wait for fonts
+      await document.fonts.ready;
+
+      // Background (placeholder for photo)
+      const gradient = ctx.createLinearGradient(0, 0, CARD_WIDTH, CARD_HEIGHT);
+      gradient.addColorStop(0, '#4a90d9');
+      gradient.addColorStop(1, '#2c5aa0');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, CARD_WIDTH, CARD_HEIGHT);
+
+      // Frame
+      drawFrame(ctx);
+
+      // Event badge
+      drawEventBadge(ctx, 'USQC26');
+
+      // Position and number
+      drawPositionNumber(ctx, cardData.position, cardData.jerseyNumber);
+
+      // Name boxes
+      drawAngledNameBoxes(ctx, cardData.firstName, cardData.lastName);
+
+      // Bottom bar
+      drawBottomBar(ctx, cardData.photographer, cardData.teamName);
+
+      return canvas;
+    }
+
+    async function main() {
+      const container = document.getElementById('cards');
+
+      const testCards = [
+        { firstName: 'Bao', lastName: 'Hoang', position: 'Utility', jerseyNumber: '08', photographer: 'Ivy Clamons', teamName: 'Texas State Quadball' },
+        { firstName: 'John', lastName: 'Smith', position: 'Chaser', jerseyNumber: '15', photographer: 'Jane Doe', teamName: 'Boston University' },
+      ];
+
+      for (const card of testCards) {
+        const div = document.createElement('div');
+        div.className = 'card-container';
+        const h2 = document.createElement('h2');
+        h2.textContent = `${card.firstName} ${card.lastName}`;
+        div.appendChild(h2);
+
+        const canvas = await renderTestCard(card);
+        canvas.style.width = '275px';
+        canvas.style.height = '375px';
+        div.appendChild(canvas);
+
+        container.appendChild(div);
+      }
+    }
+
+    main();
+  </script>
+</body>
+</html>

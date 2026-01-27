@@ -1,8 +1,9 @@
 import {
   CARD_HEIGHT,
   CARD_WIDTH,
-  SAFE_BOX,
   TRIM_BOX,
+  USQC26_COLORS,
+  USQC26_LAYOUT,
   findTemplate,
   resolveTemplateId,
   type Card,
@@ -14,26 +15,17 @@ import {
   type TournamentConfig,
 } from 'shared'
 
-const FONT_SANS = '"Sora", "Avenir Next", "Helvetica Neue", system-ui, sans-serif'
-const FONT_DISPLAY = '"Fraunces", "Iowan Old Style", serif'
+// Font family for USQC26 design
+const FONT_AMIFER = '"Amifer", "Avenir Next", "Helvetica Neue", sans-serif'
 
-// Layout constants derived from SAFE_BOX - all content positioned within safe zone
-// to ensure visibility in trim preview and survival after physical cutting
-const LAYOUT = {
-  // Horizontal positioning
-  left: SAFE_BOX.x, // 75px from left edge
-  right: CARD_WIDTH - SAFE_BOX.x, // 750px from left (75px from right edge)
-  centerX: CARD_WIDTH / 2,
-  contentWidth: SAFE_BOX.w, // 675px usable width
-
-  // Vertical positioning
-  top: SAFE_BOX.y, // 75px from top edge
-  bottom: CARD_HEIGHT - SAFE_BOX.y, // 1050px from top (75px from bottom edge)
-  centerY: CARD_HEIGHT / 2,
-
-  // Logo dimensions
-  logoMaxW: 120,
-  logoMaxH: 80,
+// Frame dimensions from Figma (node 6:44 SVG path)
+const FRAME = {
+  outerRadius: 0, // Full bleed, no outer radius
+  innerX: 56,
+  innerY: 91,
+  innerWidth: 713,
+  innerHeight: 937,
+  innerRadius: 29,
 }
 
 const BASE_THEME: TemplateTheme = {
@@ -48,33 +40,21 @@ const BASE_THEME: TemplateTheme = {
 }
 
 const FALLBACK_TEMPLATES: Record<string, TemplateDefinition> = {
+  usqc26: {
+    id: 'usqc26',
+    label: 'USQC26',
+  },
   classic: {
     id: 'classic',
     label: 'Classic',
   },
-  noir: {
-    id: 'noir',
-    label: 'Noir',
-    theme: {
-      gradientStart: 'rgba(10, 10, 15, 0)',
-      gradientEnd: 'rgba(10, 10, 15, 0.92)',
-      border: 'rgba(255, 255, 255, 0.18)',
-      accent: 'rgba(255, 255, 255, 0.7)',
-      label: '#ffffff',
-      nameColor: '#ffffff',
-      meta: '#ffffff',
-      watermark: 'rgba(248, 250, 252, 0.2)',
-    },
-  },
 }
 
 const DEFAULT_TEMPLATE_FLAGS: TemplateFlags = {
-  showGradient: true,
-  showBorders: true,
-  showWatermarkJersey: true,
+  showGradient: false,
+  showBorders: false,
+  showWatermarkJersey: false,
 }
-
-const overlayCache = new Map<string, Promise<HTMLImageElement | null>>()
 
 export type RenderCardInput = {
   card: Card
@@ -96,7 +76,7 @@ export const resolveTemplateSnapshot = (input: {
   const template =
     findTemplate(input.config, effectiveTemplateId) ??
     FALLBACK_TEMPLATES[effectiveTemplateId] ??
-    FALLBACK_TEMPLATES.classic
+    FALLBACK_TEMPLATES.usqc26
 
   const theme = { ...BASE_THEME, ...(template.theme ?? {}) }
   const flags = { ...DEFAULT_TEMPLATE_FLAGS, ...(template.flags ?? {}) }
@@ -132,34 +112,6 @@ async function loadImageSafe(url?: string | null) {
   }
 }
 
-async function loadOverlay(
-  overlayKey: string | undefined,
-  resolveAssetUrl: (key: string) => string
-) {
-  if (!overlayKey) return null
-  const url = resolveAssetUrl(overlayKey)
-  const cached = overlayCache.get(url)
-  if (cached) return cached
-  const promise = loadImage(url).catch(() => null)
-  overlayCache.set(url, promise)
-  return promise
-}
-
-function drawOverlay(
-  ctx: CanvasRenderingContext2D,
-  overlayImg: HTMLImageElement,
-  overlayKey: string | undefined
-) {
-  if (overlayImg.naturalWidth !== CARD_WIDTH || overlayImg.naturalHeight !== CARD_HEIGHT) {
-    throw new Error(
-      `Overlay "${overlayKey}" must be exactly ${CARD_WIDTH}x${CARD_HEIGHT}px, ` +
-      `but is ${overlayImg.naturalWidth}x${overlayImg.naturalHeight}px. ` +
-      `Mismatched dimensions will cause distortion.`
-    )
-  }
-  ctx.drawImage(overlayImg, 0, 0, CARD_WIDTH, CARD_HEIGHT)
-}
-
 function drawCroppedImage(
   ctx: CanvasRenderingContext2D,
   img: HTMLImageElement,
@@ -189,58 +141,100 @@ function drawCroppedImage(
   ctx.restore()
 }
 
-function drawOutlinedText(
+function roundedRect(
   ctx: CanvasRenderingContext2D,
-  text: string,
   x: number,
   y: number,
-  strokeWidth = 3
+  width: number,
+  height: number,
+  radius: number
 ) {
-  ctx.strokeStyle = 'black'
-  ctx.lineWidth = strokeWidth
-  ctx.lineJoin = 'round'
-  ctx.strokeText(text, x, y)
-  ctx.fillText(text, x, y)
+  ctx.beginPath()
+  ctx.moveTo(x + radius, y)
+  ctx.lineTo(x + width - radius, y)
+  ctx.quadraticCurveTo(x + width, y, x + width, y + radius)
+  ctx.lineTo(x + width, y + height - radius)
+  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height)
+  ctx.lineTo(x + radius, y + height)
+  ctx.quadraticCurveTo(x, y + height, x, y + height - radius)
+  ctx.lineTo(x, y + radius)
+  ctx.quadraticCurveTo(x, y, x + radius, y)
+  ctx.closePath()
 }
 
-function fillTextWithLetterSpacing(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  x: number,
-  y: number,
-  spacingPx: number,
-  strokeWidth = 2
-) {
-  ctx.strokeStyle = 'black'
-  ctx.lineWidth = strokeWidth
-  ctx.lineJoin = 'round'
-  let cursor = x
-  for (const ch of text) {
-    ctx.strokeText(ch, cursor, y)
-    ctx.fillText(ch, cursor, y)
-    cursor += ctx.measureText(ch).width + spacingPx
-  }
+function drawFrame(ctx: CanvasRenderingContext2D) {
+  // Draw the frame overlay (white border with inner cutout)
+  ctx.save()
+
+  // Create the frame path (outer rectangle minus inner rounded rectangle)
+  ctx.beginPath()
+  // Outer rectangle (full card)
+  ctx.rect(0, 0, CARD_WIDTH, CARD_HEIGHT)
+
+  // Inner rounded rectangle (cutout) - draw counter-clockwise
+  const { innerX, innerY, innerWidth, innerHeight, innerRadius } = FRAME
+  ctx.moveTo(innerX + innerRadius, innerY)
+  ctx.lineTo(innerX + innerWidth - innerRadius, innerY)
+  ctx.quadraticCurveTo(innerX + innerWidth, innerY, innerX + innerWidth, innerY + innerRadius)
+  ctx.lineTo(innerX + innerWidth, innerY + innerHeight - innerRadius)
+  ctx.quadraticCurveTo(innerX + innerWidth, innerY + innerHeight, innerX + innerWidth - innerRadius, innerY + innerHeight)
+  ctx.lineTo(innerX + innerRadius, innerY + innerHeight)
+  ctx.quadraticCurveTo(innerX, innerY + innerHeight, innerX, innerY + innerHeight - innerRadius)
+  ctx.lineTo(innerX, innerY + innerRadius)
+  ctx.quadraticCurveTo(innerX, innerY, innerX + innerRadius, innerY)
+  ctx.closePath()
+
+  ctx.fillStyle = USQC26_COLORS.white
+  ctx.fill('evenodd')
+
+  ctx.restore()
 }
 
-function fitText(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxWidth: number,
-  initialSize: number,
-  minSize: number,
-  fontFamily: string,
-  fontWeight = 'bold'
-) {
-  let size = initialSize
-  while (size > minSize) {
-    ctx.font = `${fontWeight} ${size}px ${fontFamily}`
-    if (ctx.measureText(text).width <= maxWidth) {
-      return size
-    }
-    size -= 2
-  }
-  ctx.font = `${fontWeight} ${minSize}px ${fontFamily}`
-  return minSize
+function drawEventBadge(ctx: CanvasRenderingContext2D, text: string) {
+  const { x, y, width, height, borderRadius, borderWidth, fontSize } = USQC26_LAYOUT.eventBadge
+
+  ctx.save()
+
+  // Badge background
+  roundedRect(ctx, x, y, width, height, borderRadius)
+  ctx.fillStyle = USQC26_COLORS.secondary
+  ctx.fill()
+
+  // Badge border
+  ctx.strokeStyle = USQC26_COLORS.primary
+  ctx.lineWidth = borderWidth
+  ctx.stroke()
+
+  // Badge text
+  ctx.font = `700 ${fontSize}px ${FONT_AMIFER}`
+  ctx.fillStyle = USQC26_COLORS.primary
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(text, x + width / 2, y + height / 2)
+
+  ctx.restore()
+}
+
+function drawPositionNumber(ctx: CanvasRenderingContext2D, position: string, number: string) {
+  const { centerX, positionY, numberY, positionFontSize, numberFontSize, positionLetterSpacing, numberLetterSpacing } = USQC26_LAYOUT.positionNumber
+
+  ctx.save()
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  // Position label
+  ctx.font = `500 ${positionFontSize}px ${FONT_AMIFER}`
+  ctx.fillStyle = USQC26_COLORS.primary
+  ctx.letterSpacing = `${positionLetterSpacing}px`
+  ctx.fillText(position.toUpperCase(), centerX, positionY)
+
+  // Jersey number
+  ctx.font = `500 ${numberFontSize}px ${FONT_AMIFER}`
+  ctx.fillStyle = USQC26_COLORS.numberOverlay
+  ctx.letterSpacing = `${numberLetterSpacing}px`
+  ctx.fillText(number, centerX, numberY)
+
+  ctx.restore()
 }
 
 function drawLogo(
@@ -257,6 +251,245 @@ function drawLogo(
   ctx.drawImage(img, x, y, width, height)
 }
 
+function drawAngledNameBoxes(
+  ctx: CanvasRenderingContext2D,
+  firstName: string,
+  lastName: string
+) {
+  const { rotation, firstNameBox, lastNameBox, firstNameSize, lastNameSize } = USQC26_LAYOUT.name
+  const radians = (rotation * Math.PI) / 180
+
+  // Anchor point - where the left edge of boxes meets the visible card area
+  // Boxes extend to the RIGHT (off the card), text is left-aligned at this point
+  const anchorX = 500
+  const anchorY = 870
+
+  ctx.save()
+
+  // Position at anchor point and rotate
+  ctx.translate(anchorX, anchorY)
+  ctx.rotate(radians)
+
+  // Draw last name box (white with light blue border) - extends to the right
+  const lnBoxY = -lastNameBox.height / 2
+  ctx.fillStyle = USQC26_COLORS.white
+  ctx.fillRect(0, lnBoxY, lastNameBox.width, lastNameBox.height)
+  ctx.strokeStyle = USQC26_COLORS.secondary
+  ctx.lineWidth = lastNameBox.borderWidth
+  ctx.strokeRect(0, lnBoxY, lastNameBox.width, lastNameBox.height)
+
+  // Draw last name text (white with dark outline for visibility on white box)
+  ctx.font = `500 italic ${lastNameSize}px ${FONT_AMIFER}`
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  const textPadding = 16
+  // Draw thick outline first for visibility
+  ctx.strokeStyle = USQC26_COLORS.primary
+  ctx.lineWidth = 4
+  ctx.lineJoin = 'round'
+  ctx.miterLimit = 2
+  ctx.strokeText(lastName.toUpperCase(), textPadding, 0)
+  // Then fill with white
+  ctx.fillStyle = USQC26_COLORS.white
+  ctx.fillText(lastName.toUpperCase(), textPadding, 0)
+
+  // Draw first name box (light blue with white border) - positioned above
+  const fnBoxY = lnBoxY - firstNameBox.height - 8
+  ctx.fillStyle = USQC26_COLORS.secondary
+  ctx.fillRect(0, fnBoxY, firstNameBox.width, firstNameBox.height)
+  ctx.strokeStyle = USQC26_COLORS.white
+  ctx.lineWidth = firstNameBox.borderWidth
+  ctx.strokeRect(0, fnBoxY, firstNameBox.width, firstNameBox.height)
+
+  // Draw first name text (dark blue on light blue box)
+  ctx.font = `500 italic ${firstNameSize}px ${FONT_AMIFER}`
+  ctx.fillStyle = USQC26_COLORS.primary
+  ctx.textAlign = 'left'
+  const fnTextY = fnBoxY + firstNameBox.height / 2
+  ctx.fillText(firstName.toUpperCase(), textPadding, fnTextY)
+
+  ctx.restore()
+}
+
+function drawBottomBar(
+  ctx: CanvasRenderingContext2D,
+  photographer: string,
+  teamName: string,
+  rarity: 'common' | 'uncommon' | 'rare' | 'super-rare' = 'common'
+) {
+  const { y, cameraIcon, photographerX, rarityX, raritySize, teamNameX, fontSize, letterSpacing } = USQC26_LAYOUT.bottomBar
+  const textY = y + 13 // Center text vertically in 26px bar
+
+  ctx.save()
+  ctx.font = `500 ${fontSize}px ${FONT_AMIFER}`
+  ctx.fillStyle = USQC26_COLORS.primary
+  ctx.textBaseline = 'middle'
+
+  // Camera icon (simple rectangle placeholder - can be replaced with actual icon)
+  ctx.fillStyle = USQC26_COLORS.primary
+  roundedRect(ctx, cameraIcon.x, cameraIcon.y, cameraIcon.width, cameraIcon.height, 2)
+  ctx.fill()
+
+  // Photographer name
+  ctx.fillStyle = USQC26_COLORS.primary
+  ctx.textAlign = 'left'
+  ctx.letterSpacing = `${letterSpacing.photographer}px`
+  ctx.fillText(photographer.toUpperCase(), photographerX, textY)
+
+  // Rarity indicator
+  ctx.fillStyle = USQC26_COLORS.primary
+  if (rarity === 'common' || rarity === 'uncommon') {
+    // Circle for common/uncommon
+    ctx.beginPath()
+    ctx.arc(rarityX + raritySize / 2, y + 13, raritySize / 2, 0, Math.PI * 2)
+    ctx.fill()
+  } else {
+    // Star for rare/super-rare
+    drawStar(ctx, rarityX + raritySize / 2, y + 13, raritySize / 2, 5)
+    ctx.fill()
+    if (rarity === 'super-rare') {
+      // Second star for super-rare
+      drawStar(ctx, rarityX + raritySize / 2 + raritySize + 4, y + 13, raritySize / 2, 5)
+      ctx.fill()
+    }
+  }
+
+  // Team name (right-aligned)
+  ctx.textAlign = 'right'
+  ctx.letterSpacing = `${letterSpacing.teamName}px`
+  ctx.fillText(teamName.toUpperCase(), teamNameX, textY)
+
+  ctx.restore()
+}
+
+function drawStar(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius: number, points: number) {
+  const innerRadius = radius * 0.4
+  ctx.beginPath()
+  for (let i = 0; i < points * 2; i++) {
+    const r = i % 2 === 0 ? radius : innerRadius
+    const angle = (Math.PI / points) * i - Math.PI / 2
+    const x = cx + r * Math.cos(angle)
+    const y = cy + r * Math.sin(angle)
+    if (i === 0) ctx.moveTo(x, y)
+    else ctx.lineTo(x, y)
+  }
+  ctx.closePath()
+}
+
+function drawRareCardContent(
+  ctx: CanvasRenderingContext2D,
+  title: string,
+  caption: string
+) {
+  const { titleAnchorX, titleAnchorY, captionAnchorX, captionAnchorY, titleFontSize, captionFontSize, rotation } = USQC26_LAYOUT.rareCard
+  const radians = (rotation * Math.PI) / 180
+
+  ctx.save()
+
+  // Draw title box and text
+  ctx.translate(titleAnchorX, titleAnchorY)
+  ctx.rotate(radians)
+
+  // Title box (white with blue border)
+  const titleBoxWidth = 700
+  const titleBoxHeight = 80
+  ctx.fillStyle = USQC26_COLORS.white
+  ctx.fillRect(0, -titleBoxHeight / 2, titleBoxWidth, titleBoxHeight)
+  ctx.strokeStyle = USQC26_COLORS.secondary
+  ctx.lineWidth = 3
+  ctx.strokeRect(0, -titleBoxHeight / 2, titleBoxWidth, titleBoxHeight)
+
+  // Title text
+  ctx.font = `500 italic ${titleFontSize}px ${FONT_AMIFER}`
+  ctx.fillStyle = USQC26_COLORS.white
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(title, 16, 0)
+
+  ctx.restore()
+
+  // Draw caption box and text
+  ctx.save()
+  ctx.translate(captionAnchorX, captionAnchorY)
+  ctx.rotate(radians)
+
+  // Caption box (light blue with white border)
+  const captionBoxWidth = 500
+  const captionBoxHeight = 50
+  ctx.fillStyle = USQC26_COLORS.secondary
+  ctx.fillRect(0, -captionBoxHeight / 2, captionBoxWidth, captionBoxHeight)
+  ctx.strokeStyle = USQC26_COLORS.white
+  ctx.lineWidth = 3
+  ctx.strokeRect(0, -captionBoxHeight / 2, captionBoxWidth, captionBoxHeight)
+
+  // Caption text
+  ctx.font = `500 italic ${captionFontSize}px ${FONT_AMIFER}`
+  ctx.fillStyle = USQC26_COLORS.primary
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(caption, 16, 0)
+
+  ctx.restore()
+}
+
+function drawSuperRareName(
+  ctx: CanvasRenderingContext2D,
+  firstName: string,
+  lastName: string
+) {
+  const { centerX, firstNameY, lastNameY, firstNameSize, lastNameSize } = USQC26_LAYOUT.superRare
+
+  ctx.save()
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  // First name (smaller, above)
+  ctx.font = `500 ${firstNameSize}px ${FONT_AMIFER}`
+  ctx.fillStyle = USQC26_COLORS.white
+  ctx.fillText(firstName.toUpperCase(), centerX, firstNameY)
+
+  // Last name (larger, below) - with italic style
+  ctx.font = `500 italic ${lastNameSize}px ${FONT_AMIFER}`
+  ctx.fillStyle = USQC26_COLORS.white
+  ctx.fillText(lastName, centerX, lastNameY)
+
+  ctx.restore()
+}
+
+function drawNationalTeamName(
+  ctx: CanvasRenderingContext2D,
+  fullName: string
+) {
+  const { nameY, nameFontSize } = USQC26_LAYOUT.nationalTeam
+
+  ctx.save()
+
+  // Draw name at top in angled box
+  const rotation = -6
+  const radians = (rotation * Math.PI) / 180
+
+  ctx.translate(180, nameY + 25)
+  ctx.rotate(radians)
+
+  // Name box (white with blue border)
+  const boxWidth = 500
+  const boxHeight = 50
+  ctx.fillStyle = USQC26_COLORS.white
+  ctx.fillRect(0, -boxHeight / 2, boxWidth, boxHeight)
+  ctx.strokeStyle = USQC26_COLORS.secondary
+  ctx.lineWidth = 3
+  ctx.strokeRect(0, -boxHeight / 2, boxWidth, boxHeight)
+
+  // Name text
+  ctx.font = `500 ${nameFontSize}px ${FONT_AMIFER}`
+  ctx.fillStyle = USQC26_COLORS.primary
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(fullName.toUpperCase(), 16, 0)
+
+  ctx.restore()
+}
+
 function getTeamInfo(card: Card, config: TournamentConfig) {
   if ('teamId' in card && card.teamId) {
     const team = config.teams.find((entry) => entry.id === card.teamId)
@@ -268,15 +501,6 @@ function getTeamInfo(card: Card, config: TournamentConfig) {
   return null
 }
 
-function getCardTypeLabel(card: Card, config: TournamentConfig) {
-  const entry = config.cardTypes.find((type) => type.type === card.cardType)
-  return entry?.label ?? card.cardType
-}
-
-function getCardTypeConfig(card: Card, config: TournamentConfig) {
-  return config.cardTypes.find((type) => type.type === card.cardType)
-}
-
 const DEFAULT_CROP: CropRect = { x: 0, y: 0, w: 1, h: 1, rotateDeg: 0 }
 
 async function renderCardFrame(
@@ -284,9 +508,7 @@ async function renderCardFrame(
   ctx: CanvasRenderingContext2D,
   crop: CropRect
 ) {
-  const { card, config, imageUrl, resolveAssetUrl, templateId } = input
-  const { templateSnapshot } = resolveTemplateSnapshot({ card, config, templateId })
-  const { theme, flags, overlayKey, overlayPlacement } = templateSnapshot
+  const { card, config, imageUrl, resolveAssetUrl } = input
 
   if (document.fonts?.ready) {
     await document.fonts.ready
@@ -294,134 +516,90 @@ async function renderCardFrame(
 
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
+
+  // 1. Draw the photo (full bleed)
   const img = await loadImage(imageUrl)
   drawCroppedImage(ctx, img, crop, 0, 0, CARD_WIDTH, CARD_HEIGHT)
 
-  if (flags.showGradient) {
-    const overlayGradient = ctx.createLinearGradient(0, CARD_HEIGHT - 350, 0, CARD_HEIGHT)
-    overlayGradient.addColorStop(0, theme.gradientStart)
-    overlayGradient.addColorStop(1, theme.gradientEnd)
-    ctx.fillStyle = overlayGradient
-    ctx.fillRect(0, CARD_HEIGHT - 350, CARD_WIDTH, 350)
-  }
+  // 2. Draw the frame overlay
+  drawFrame(ctx)
 
-  if (flags.showBorders) {
-    // Position borders inside trim zone so they survive cutting and appear in previews
-    const borderOuterInset = TRIM_BOX.x + 2
-    const borderInnerInset = TRIM_BOX.x + 12
-
-    ctx.strokeStyle = theme.border
-    ctx.lineWidth = 2
-    ctx.strokeRect(
-      borderOuterInset,
-      borderOuterInset,
-      CARD_WIDTH - borderOuterInset * 2,
-      CARD_HEIGHT - borderOuterInset * 2
-    )
-
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)'
-    ctx.lineWidth = 1
-    ctx.strokeRect(
-      borderInnerInset,
-      borderInnerInset,
-      CARD_WIDTH - borderInnerInset * 2,
-      CARD_HEIGHT - borderInnerInset * 2
-    )
-  }
-
-  const overlayImg = await loadOverlay(overlayKey, resolveAssetUrl)
-  if (overlayImg && overlayPlacement !== 'aboveText') {
-    drawOverlay(ctx, overlayImg, overlayKey)
-  }
-
-  const cardLabel = getCardTypeLabel(card, config).toUpperCase()
-  ctx.font = `13px ${FONT_SANS}`
-  ctx.fillStyle = theme.label
-  ctx.textAlign = 'left'
-  fillTextWithLetterSpacing(ctx, cardLabel, LAYOUT.left, LAYOUT.top + 13, 2.5)
-
-  const cardTypeConfig = getCardTypeConfig(card, config)
+  // 3. Draw team logo
   const team = getTeamInfo(card, config)
-  const logoKey =
-    card.cardType === 'player' || card.cardType === 'team-staff'
-      ? team?.logoKey
-      : card.cardType === 'tournament-staff' || card.cardType === 'rare'
-        ? config.branding.tournamentLogoKey
-        : cardTypeConfig?.logoOverrideKey ?? config.branding.orgLogoKey
-
+  const logoKey = team?.logoKey || config.branding.tournamentLogoKey
   const logoImg = await loadImageSafe(logoKey ? resolveAssetUrl(logoKey) : null)
   if (logoImg) {
-    drawLogo(ctx, logoImg, LAYOUT.right - LAYOUT.logoMaxW, LAYOUT.top, LAYOUT.logoMaxW, LAYOUT.logoMaxH)
+    const { x, y, maxWidth, maxHeight } = USQC26_LAYOUT.teamLogo
+    drawLogo(ctx, logoImg, x, y, maxWidth, maxHeight)
   }
 
-  if (
-    flags.showWatermarkJersey &&
-    card.cardType !== 'rare' &&
-    cardTypeConfig?.showJerseyNumber &&
-    card.jerseyNumber
-  ) {
-    ctx.font = `bold 130px ${FONT_SANS}`
-    ctx.fillStyle = theme.watermark
-    ctx.textAlign = 'left'
-    ctx.fillText(card.jerseyNumber, LAYOUT.left, LAYOUT.top + 100)
+  // 4. Draw event indicator badge (if configured)
+  const eventIndicator = config.branding.eventIndicator
+  if (eventIndicator) {
+    drawEventBadge(ctx, eventIndicator)
   }
 
+  // 5. Draw card-type-specific content
   if (card.cardType === 'rare') {
-    const title = card.title ?? 'Rare Card'
-    const caption = card.caption ?? ''
+    // Rare card: centered title/caption
+    const title = 'title' in card ? card.title ?? 'Rare Card' : 'Rare Card'
+    const caption = 'caption' in card ? card.caption ?? '' : ''
+    drawRareCardContent(ctx, title, caption)
 
-    ctx.strokeStyle = theme.accent
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.moveTo(LAYOUT.left, LAYOUT.centerY - 40)
-    ctx.lineTo(LAYOUT.right, LAYOUT.centerY - 40)
-    ctx.stroke()
-    ctx.beginPath()
-    ctx.moveTo(LAYOUT.left, LAYOUT.centerY + 40)
-    ctx.lineTo(LAYOUT.right, LAYOUT.centerY + 40)
-    ctx.stroke()
+    // Bottom bar for rare card
+    const photographer = card.photographer ?? ''
+    drawBottomBar(ctx, photographer, 'RARE CARD', 'rare')
 
-    const titleSize = fitText(ctx, title, LAYOUT.contentWidth, 52, 28, FONT_DISPLAY)
-    ctx.font = `bold ${titleSize}px ${FONT_DISPLAY}`
-    ctx.fillStyle = theme.nameColor
-    ctx.textAlign = 'center'
-    drawOutlinedText(ctx, title, LAYOUT.centerX, LAYOUT.centerY - 5, 4)
+  } else if (card.cardType === 'super-rare') {
+    // Super rare: centered name style
+    const firstName = 'firstName' in card ? card.firstName ?? '' : ''
+    const lastName = 'lastName' in card ? card.lastName ?? '' : ''
+    drawSuperRareName(ctx, firstName, lastName)
 
-    if (caption) {
-      ctx.font = `20px ${FONT_SANS}`
-      ctx.fillStyle = theme.meta
-      drawOutlinedText(ctx, caption, LAYOUT.centerX, LAYOUT.centerY + 30, 2)
+    // Position and number for super-rare
+    if ('position' in card && card.position && 'jerseyNumber' in card && card.jerseyNumber) {
+      drawPositionNumber(ctx, card.position, card.jerseyNumber)
     }
+
+    // Bottom bar
+    const photographer = card.photographer ?? ''
+    const teamName = team?.name ?? ''
+    drawBottomBar(ctx, photographer, teamName, 'super-rare')
+
+  } else if (card.cardType === 'national-team') {
+    // National team (uncommon): name at top
+    const firstName = 'firstName' in card ? card.firstName ?? '' : ''
+    const lastName = 'lastName' in card ? card.lastName ?? '' : ''
+    const fullName = `${firstName} ${lastName}`.trim()
+    drawNationalTeamName(ctx, fullName)
+
+    // Bottom bar with team name and jersey number
+    const photographer = card.photographer ?? ''
+    const teamName = team?.name ?? 'USA QUADBALL'
+    const jerseyNumber = 'jerseyNumber' in card ? card.jerseyNumber ?? '' : ''
+    const bottomText = jerseyNumber ? `${teamName} #${jerseyNumber}` : teamName
+    drawBottomBar(ctx, photographer, bottomText, 'uncommon')
+
   } else {
-    const fullName = [card.firstName, card.lastName].filter(Boolean).join(' ').trim()
-    const nameText = fullName || 'Player Name'
-    const nameFontSize = fitText(ctx, nameText, LAYOUT.contentWidth, 56, 34, FONT_DISPLAY)
-    ctx.fillStyle = theme.nameColor
-    ctx.textAlign = 'left'
-    ctx.font = `bold ${nameFontSize}px ${FONT_DISPLAY}`
-    drawOutlinedText(ctx, nameText, LAYOUT.left, LAYOUT.bottom - 145, 4)
+    // Standard player card
+    const firstName = 'firstName' in card ? card.firstName ?? '' : ''
+    const lastName = 'lastName' in card ? card.lastName ?? '' : ''
 
-    const positionTeam = [card.position, team?.name].filter(Boolean).join(' / ')
-    ctx.font = `28px ${FONT_SANS}`
-    ctx.fillStyle = theme.meta
-    drawOutlinedText(ctx, positionTeam || 'Position / Team', LAYOUT.left, LAYOUT.bottom - 95, 2)
-
-    if (cardTypeConfig?.showJerseyNumber && card.jerseyNumber) {
-      ctx.font = `bold 36px ${FONT_SANS}`
-      ctx.fillStyle = theme.meta
-      drawOutlinedText(ctx, `#${card.jerseyNumber}`, LAYOUT.left, LAYOUT.bottom - 45, 3)
+    // Position and number
+    if ('position' in card && card.position && 'jerseyNumber' in card && card.jerseyNumber) {
+      drawPositionNumber(ctx, card.position, card.jerseyNumber)
     }
-  }
 
-  if (card.photographer) {
-    ctx.font = `18px ${FONT_SANS}`
-    ctx.fillStyle = theme.label
-    ctx.textAlign = 'right'
-    drawOutlinedText(ctx, `Photo: ${card.photographer}`, LAYOUT.right, LAYOUT.bottom - 5, 2)
-  }
+    // Angled name boxes
+    if (firstName || lastName) {
+      drawAngledNameBoxes(ctx, firstName, lastName)
+    }
 
-  if (overlayImg && overlayPlacement === 'aboveText') {
-    drawOverlay(ctx, overlayImg, overlayKey)
+    // Bottom bar
+    const photographer = card.photographer ?? ''
+    const teamName = team?.name ?? ''
+    const rarity = card.rarity ?? 'common'
+    drawBottomBar(ctx, photographer, teamName, rarity)
   }
 }
 
@@ -482,9 +660,6 @@ export async function renderCard(input: RenderCardInput): Promise<Blob> {
   })
 }
 
-/**
- * Renders a trim-aspect preview by cropping the full card render to the trim box.
- */
 export async function renderPreviewTrim(input: RenderCardInput): Promise<Blob> {
   const canvas = document.createElement('canvas')
   canvas.width = TRIM_BOX.w

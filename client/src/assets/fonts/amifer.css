@@ -1,0 +1,25 @@
+/* Amifer Trial Font Family */
+
+@font-face {
+  font-family: 'Amifer';
+  src: url('./Amifer-Medium.otf') format('opentype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Amifer';
+  src: url('./Amifer-MediumItalic.otf') format('opentype');
+  font-weight: 500;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Amifer';
+  src: url('./Amifer-Bold.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}

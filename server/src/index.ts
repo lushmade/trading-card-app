@@ -23,6 +23,8 @@ import {
   MAX_UPLOAD_BYTES,
   USQC_2025_CONFIG,
   USQC_2025_TOURNAMENT,
+  USQC_2026_CONFIG,
+  USQC_2026_TOURNAMENT,
 } from 'shared'
 
 const app = new Hono()
@@ -367,15 +369,24 @@ const getSubmitValidationError = (card: Card) => {
     case 'rare':
       if (!card.title) return 'title is required before submitting'
       break
-    default:
+    case 'super-rare':
+      // Super-rare uses firstName/lastName from RareCard type
       if (!card.firstName) return 'firstName is required before submitting'
       if (!card.lastName) return 'lastName is required before submitting'
-      if (!card.position) return 'position is required before submitting'
+      break
+    default:
+      // Standard cards (player, team-staff, media, official, tournament-staff, national-team)
+      if ('firstName' in card && !card.firstName) return 'firstName is required before submitting'
+      if ('lastName' in card && !card.lastName) return 'lastName is required before submitting'
+      // Position is optional for some card types
       break
   }
 
-  if (card.cardType === 'player' || card.cardType === 'team-staff') {
-    if (!card.teamId && !card.teamName) {
+  if (card.cardType === 'player' || card.cardType === 'team-staff' || card.cardType === 'national-team') {
+    if (!('teamId' in card) && !('teamName' in card)) {
+      return 'team is required before submitting'
+    }
+    if ('teamId' in card && !card.teamId && 'teamName' in card && !card.teamName) {
       return 'team is required before submitting'
     }
   }
@@ -638,9 +649,10 @@ const requireAdmin: MiddlewareHandler = async (c, next) => {
 // Protect all admin routes
 app.use('/admin/*', requireAdmin)
 
-const FALLBACK_TOURNAMENTS: TournamentListEntry[] = [USQC_2025_TOURNAMENT]
+const FALLBACK_TOURNAMENTS: TournamentListEntry[] = [USQC_2025_TOURNAMENT, USQC_2026_TOURNAMENT]
 const FALLBACK_CONFIGS: Record<string, TournamentConfig> = {
   [USQC_2025_CONFIG.id]: USQC_2025_CONFIG,
+  [USQC_2026_CONFIG.id]: USQC_2026_CONFIG,
 }
 
 app.get('/', (c) => c.text('Hello Hono!'))

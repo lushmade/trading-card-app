@@ -9,7 +9,11 @@ export type CardType =
   | "media"
   | "official"
   | "tournament-staff"
-  | "rare";
+  | "rare"
+  | "super-rare"
+  | "national-team";
+
+export type CardRarity = "common" | "uncommon" | "rare" | "super-rare";
 
 export type CardStatus = "draft" | "submitted" | "rendered";
 
@@ -77,6 +81,7 @@ export type CardBase = {
   editToken?: string;
   tournamentId: string;
   cardType: CardType;
+  rarity?: CardRarity;
   templateId?: string;
   status: CardStatus;
   photographer?: string;
@@ -89,7 +94,7 @@ export type CardBase = {
 };
 
 export type StandardCard = CardBase & {
-  cardType: Exclude<CardType, "rare">;
+  cardType: Exclude<CardType, "rare" | "super-rare">;
   firstName?: string;
   lastName?: string;
   teamId?: string;
@@ -99,9 +104,17 @@ export type StandardCard = CardBase & {
 };
 
 export type RareCard = CardBase & {
-  cardType: "rare";
+  cardType: "rare" | "super-rare";
   title?: string;
   caption?: string;
+  // Super-rare can optionally include player info for the centered name style
+  firstName?: string;
+  lastName?: string;
+  // Super-rare also shows position and jersey number
+  teamId?: string;
+  teamName?: string;
+  position?: string;
+  jerseyNumber?: string;
 };
 
 export type Card = StandardCard | RareCard;
@@ -121,6 +134,7 @@ export type TournamentConfig = {
     tournamentLogoKey: string;
     orgLogoKey?: string;
     primaryColor?: string;
+    eventIndicator?: string;
   };
   teams: Array<{
     id: string;
