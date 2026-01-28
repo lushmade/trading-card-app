@@ -23,6 +23,7 @@ import {
   type TournamentListEntry,
   USQC_2025_CONFIG,
   USQC_2025_TOURNAMENT,
+  USQC_2026_TOURNAMENT,
 } from 'shared'
 import { renderPreviewTrim } from './renderCard'
 import { api, assetUrlForKey, media, writeHeaders } from './api'
@@ -421,7 +422,7 @@ function App() {
   const tournamentsQuery = useQuery({
     queryKey: ['tournaments'],
     queryFn: fetchTournaments,
-    initialData: [USQC_2025_TOURNAMENT],
+    initialData: [USQC_2025_TOURNAMENT, USQC_2026_TOURNAMENT],
   })
 
   useEffect(() => {
