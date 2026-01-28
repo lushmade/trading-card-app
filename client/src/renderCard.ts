@@ -234,7 +234,7 @@ function drawPositionNumber(ctx: CanvasRenderingContext2D, position: string, num
   ctx.save()
   ctx.textAlign = 'center'
   ctx.textBaseline = 'top'
-  ctx.lineJoin = 'round'
+  ctx.lineJoin = 'miter'
   ctx.miterLimit = 2
 
   // Position label - #1B4278 fill with #FFFFFF stroke
@@ -312,6 +312,70 @@ function drawLogo(
   ctx.restore()
 }
 
+// Max width for name text before wrapping to second line
+const NAME_MAX_WIDTH = 550
+
+// Helper to wrap text into lines that fit within maxWidth
+// Handles spaces, hyphens, and forces breaks on long single words
+function wrapText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+): string[] {
+  // First check if the entire text fits
+  if (ctx.measureText(text).width <= maxWidth) {
+    return [text]
+  }
+
+  // Split on spaces and hyphens, keeping the delimiter
+  const parts = text.split(/(\s+|-)/);
+  const lines: string[] = []
+  let currentLine = ''
+
+  for (const part of parts) {
+    if (!part) continue
+
+    const testLine = currentLine + part
+    const testWidth = ctx.measureText(testLine).width
+
+    if (testWidth > maxWidth && currentLine) {
+      // Current line is full, start a new line
+      lines.push(currentLine.trim())
+      // If part is a hyphen, keep it with the previous line
+      if (part === '-') {
+        lines[lines.length - 1] += '-'
+        currentLine = ''
+      } else {
+        currentLine = part
+      }
+    } else {
+      currentLine = testLine
+    }
+  }
+
+  if (currentLine.trim()) {
+    lines.push(currentLine.trim())
+  }
+
+  // If we still have a single line that's too long (no break points), force a character break
+  if (lines.length === 1 && ctx.measureText(lines[0]).width > maxWidth) {
+    const longText = lines[0]
+    let breakPoint = longText.length
+    for (let i = 1; i < longText.length; i++) {
+      if (ctx.measureText(longText.slice(0, i)).width > maxWidth) {
+        breakPoint = i - 1
+        break
+      }
+    }
+    if (breakPoint > 0 && breakPoint < longText.length) {
+      return [longText.slice(0, breakPoint), longText.slice(breakPoint)].slice(0, 2)
+    }
+  }
+
+  // Limit to 2 lines max
+  return lines.slice(0, 2)
+}
+
 function drawAngledNameBoxes(
   ctx: CanvasRenderingContext2D,
   firstName: string,
@@ -335,73 +399,114 @@ function drawAngledNameBoxes(
 
   ctx.save()
 
-  // Measure text widths to size boxes dynamically (with letter spacing)
+  // Measure and wrap text for last name
   ctx.font = `500 italic ${lastNameSize}px ${FONT_AMIFER}`
   ctx.letterSpacing = `${letterSpacing.lastName}px`
   const lastNameText = lastName.toUpperCase()
-  const lastNameWidth = ctx.measureText(lastNameText).width
-  const lnBoxWidth = lastNameWidth + leftPadding + rightPadding + boxExtension
+  const lastNameLines = wrapText(ctx, lastNameText, NAME_MAX_WIDTH)
+  const lastNameMaxWidth = Math.max(...lastNameLines.map(line => ctx.measureText(line).width))
+  const lnBoxWidth = lastNameMaxWidth + leftPadding + rightPadding + boxExtension
+  const lnLineHeight = lastNameSize * 1.1
+  const lnBoxHeight = lastNameBox.height + (lastNameLines.length - 1) * lnLineHeight
 
+  // Measure and wrap text for first name
   ctx.font = `500 italic ${firstNameSize}px ${FONT_AMIFER}`
   ctx.letterSpacing = `${letterSpacing.firstName}px`
   const firstNameText = firstName.toUpperCase()
-  const firstNameWidth = ctx.measureText(firstNameText).width
-  const fnBoxWidth = firstNameWidth + leftPadding + rightPadding + boxExtension
+  const firstNameLines = wrapText(ctx, firstNameText, NAME_MAX_WIDTH)
+  const firstNameMaxWidth = Math.max(...firstNameLines.map(line => ctx.measureText(line).width))
+  const fnBoxWidth = firstNameMaxWidth + leftPadding + rightPadding + boxExtension
+  const fnLineHeight = firstNameSize * 1.1
+  const fnBoxHeight = firstNameBox.height + (firstNameLines.length - 1) * fnLineHeight
 
   // Position at anchor point (right edge of boxes) and rotate
   ctx.translate(anchorX, anchorY)
   ctx.rotate(radians)
 
-  // First name box Y position (above last name)
-  const fnBoxY = -lastNameBox.height / 2 - firstNameBox.height
+  // X-offset adjustments for fine-tuning positions (box and text separately)
+  const fnBoxXOffset = 8   // First name box offset (12 - 4 = 8)
+  const fnTextXOffset = 12 // First name text offset (unchanged)
+  const lnBoxXOffset = 3   // Last name box offset (10 - 7 = 3)
+  const lnTextXOffset = 10 // Last name text offset (unchanged)
+
+  // Last name box Y position (top edge stays fixed at original position)
+  // Original: lnBoxY = -lastNameBox.height / 2
+  const lnBoxY = -lastNameBox.height / 2
+
+  // First name box Y position (bottom-justified: bottom edge stays fixed)
+  // Original bottom edge was at: -lastNameBox.height / 2
+  // So fnBoxY = lnBoxY - fnBoxHeight (box extends upward)
+  const fnBoxY = lnBoxY - fnBoxHeight
 
   // Draw first name box FIRST (light blue with white border) - so last name box overlaps on top
   ctx.fillStyle = USQC26_COLORS.secondary
-  ctx.fillRect(-fnBoxWidth + boxExtension, fnBoxY, fnBoxWidth, firstNameBox.height)
+  ctx.fillRect(-fnBoxWidth + boxExtension + fnBoxXOffset, fnBoxY, fnBoxWidth, fnBoxHeight)
   ctx.strokeStyle = USQC26_COLORS.white
   ctx.lineWidth = firstNameBox.borderWidth
-  ctx.strokeRect(-fnBoxWidth + boxExtension, fnBoxY, fnBoxWidth, firstNameBox.height)
+  ctx.strokeRect(-fnBoxWidth + boxExtension + fnBoxXOffset, fnBoxY, fnBoxWidth, fnBoxHeight)
 
   // Draw first name text (dark blue with white stroke)
+  // Bottom-justified: text lines are positioned from the bottom up
   ctx.font = `500 italic ${firstNameSize}px ${FONT_AMIFER}`
   ctx.letterSpacing = `${letterSpacing.firstName}px`
   ctx.textAlign = 'right'
   ctx.textBaseline = 'middle'
-  ctx.lineJoin = 'round'
+  ctx.lineJoin = 'miter'
   ctx.miterLimit = 2
-  const fnTextY = fnBoxY + firstNameBox.height / 2 + textYOffset
-  // Draw white stroke first
-  ctx.strokeStyle = USQC26_COLORS.white
-  ctx.lineWidth = firstNameBox.strokeWidth
-  ctx.strokeText(firstNameText, -rightPadding, fnTextY)
-  // Then fill with primary color
-  ctx.fillStyle = USQC26_COLORS.primary
-  ctx.fillText(firstNameText, -rightPadding, fnTextY)
 
-  // Last name box Y position (overlapping first name's bottom border)
-  const lnBoxY = -lastNameBox.height / 2
+  // Calculate Y positions for first name lines (bottom-justified)
+  // Bottom of box is at fnBoxY + fnBoxHeight
+  // Last line should be at bottom, first line above it
+  const fnBoxBottom = fnBoxY + fnBoxHeight
+  const fnTextPadding = firstNameBox.height / 2 // Padding from bottom edge to last line center
+
+  for (let i = 0; i < firstNameLines.length; i++) {
+    const lineIndex = firstNameLines.length - 1 - i // Reverse order for bottom-up positioning
+    const lineY = fnBoxBottom - fnTextPadding - (i * fnLineHeight) + textYOffset
+    const lineText = firstNameLines[lineIndex]
+
+    // Draw white stroke first
+    ctx.strokeStyle = USQC26_COLORS.white
+    ctx.lineWidth = firstNameBox.strokeWidth
+    ctx.strokeText(lineText, -rightPadding + fnTextXOffset, lineY)
+    // Then fill with primary color
+    ctx.fillStyle = USQC26_COLORS.primary
+    ctx.fillText(lineText, -rightPadding + fnTextXOffset, lineY)
+  }
 
   // Draw last name box ON TOP (white with light blue border)
   ctx.fillStyle = USQC26_COLORS.white
-  ctx.fillRect(-lnBoxWidth + boxExtension, lnBoxY, lnBoxWidth, lastNameBox.height)
+  ctx.fillRect(-lnBoxWidth + boxExtension + lnBoxXOffset, lnBoxY, lnBoxWidth, lnBoxHeight)
   ctx.strokeStyle = USQC26_COLORS.secondary
   ctx.lineWidth = lastNameBox.borderWidth
-  ctx.strokeRect(-lnBoxWidth + boxExtension, lnBoxY, lnBoxWidth, lastNameBox.height)
+  ctx.strokeRect(-lnBoxWidth + boxExtension + lnBoxXOffset, lnBoxY, lnBoxWidth, lnBoxHeight)
 
   // Draw last name text (white with #1B4278 stroke)
+  // Top-justified: text lines are positioned from the top down
   ctx.font = `500 italic ${lastNameSize}px ${FONT_AMIFER}`
   ctx.letterSpacing = `${letterSpacing.lastName}px`
   ctx.textAlign = 'right'
   ctx.textBaseline = 'middle'
-  ctx.lineJoin = 'round'
+  ctx.lineJoin = 'miter'
   ctx.miterLimit = 2
-  // Draw primary color stroke first
-  ctx.strokeStyle = USQC26_COLORS.primary
-  ctx.lineWidth = lastNameBox.strokeWidth
-  ctx.strokeText(lastNameText, -rightPadding, textYOffset)
-  // Then fill with white
-  ctx.fillStyle = USQC26_COLORS.white
-  ctx.fillText(lastNameText, -rightPadding, textYOffset)
+
+  // Calculate Y positions for last name lines (top-justified)
+  // Top of box is at lnBoxY
+  // First line at top, subsequent lines below
+  const lnTextPadding = lastNameBox.height / 2 // Padding from top edge to first line center
+
+  for (let i = 0; i < lastNameLines.length; i++) {
+    const lineY = lnBoxY + lnTextPadding + (i * lnLineHeight) + textYOffset
+    const lineText = lastNameLines[i]
+
+    // Draw primary color stroke first
+    ctx.strokeStyle = USQC26_COLORS.primary
+    ctx.lineWidth = lastNameBox.strokeWidth
+    ctx.strokeText(lineText, -rightPadding + lnTextXOffset, lineY)
+    // Then fill with white
+    ctx.fillStyle = USQC26_COLORS.white
+    ctx.fillText(lineText, -rightPadding + lnTextXOffset, lineY)
+  }
 
   ctx.restore()
 }
