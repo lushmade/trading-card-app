@@ -112,6 +112,7 @@ Open http://localhost:5173. Both frontend and backend hot reload on save.
 | POST | `/cards` | Create new card draft |
 | GET | `/cards` | List cards by status (not drafts) |
 | GET | `/cards/:id` | Get card by ID |
+| GET | `/cards/:id/photo-url` | Get signed URL for draft photo (edit token required) |
 | PATCH | `/cards/:id` | Update card (requires edit token) |
 | POST | `/cards/:id/submit` | Submit card for rendering |
 
@@ -136,13 +137,20 @@ Open http://localhost:5173. Both frontend and backend hot reload on save.
 | POST | `/admin/cards/:id/renders/commit` | Commit render and update status |
 | POST | `/admin/cards/:id/render` | Mark card as rendered |
 
-### Data Flow
+### Data Flow (Auto-Save)
 
-1. Client creates card draft → gets card ID
-2. Client uploads original photo using presigned URL
-3. User crops image (stored as normalized percentages)
-4. Client can upload cropped image
-5. Submit triggers render pipeline (renderKey stored on card)
+The app uses automatic background saving - no manual "Save Draft" button:
+
+1. **Card type selected** → Card auto-created in background → card ID + edit token stored
+2. **Photo selected** → Immediately uploads to S3 (no debounce)
+3. **Form fields edited** → Debounced auto-save (2.5s after last change) → PATCH to server + localStorage
+4. **Page refresh** → Resume modal appears → Photo restored via signed URL from `/cards/:id/photo-url`
+5. **Submit** → Render pipeline triggered (renderKey stored on card)
+
+Draft persistence uses `localStorage` (`client/src/draftStorage.ts`) with:
+- `cardId`, `editToken`, `tournamentId`, `cardType`
+- Form field values
+- Photo metadata (`key`, `width`, `height`, `crop`) for S3 restoration
 
 ### Type Aliases (tsconfig.json)
 
@@ -161,6 +169,7 @@ Generates 825x1125 PNG cards client-side:
 
 ## Development Notes
 
+- **Auto-save**: Form fields save automatically 2.5s after changes; photos upload immediately on selection
 - Card status flow: `draft` → `submitted` → `rendered`
 - Card types: `player`, `team-staff`, `media`, `official`, `tournament-staff`, `rare`
 - Crop coordinates stored as normalized 0-1 floats (rotation: 0, 90, 180, 270)

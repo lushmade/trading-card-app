@@ -1486,6 +1486,56 @@ app.get('/cards/:id', async (c) => {
   return c.json(toPublicCard(result.Item as Card))
 })
 
+// Get signed URL for draft card's original photo (requires edit token)
+app.get('/cards/:id/photo-url', async (c) => {
+  const id = c.req.param('id')
+  const editToken = normalizeString(c.req.header(EDIT_TOKEN_HEADER))
+
+  if (!editToken) {
+    return c.json({ error: 'Edit token required' }, 401)
+  }
+
+  const result = await ddb.send(
+    new GetCommand({
+      TableName: Resource.Cards.name,
+      Key: { id },
+    })
+  )
+
+  if (!result.Item) {
+    return c.json({ error: 'Not found' }, 404)
+  }
+
+  const card = result.Item as Card
+  if (card.editToken !== editToken) {
+    return c.json({ error: 'Invalid token' }, 403)
+  }
+
+  if (card.status !== 'draft') {
+    return c.json({ error: 'Not a draft' }, 409)
+  }
+
+  if (!card.photo?.originalKey) {
+    return c.json({ error: 'No photo' }, 400)
+  }
+
+  const url = await getSignedUrl(
+    s3,
+    new GetObjectCommand({
+      Bucket: Resource.Media.name,
+      Key: card.photo.originalKey,
+    }),
+    { expiresIn: 300 }
+  )
+
+  return c.json({
+    url,
+    width: card.photo.width,
+    height: card.photo.height,
+    crop: card.photo.crop,
+  })
+})
+
 app.patch('/cards/:id', async (c) => {
   const id = c.req.param('id')
   const body = await getJsonBody(c)

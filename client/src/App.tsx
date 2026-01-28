@@ -493,6 +493,11 @@ function App() {
   const [isDragging, setIsDragging] = useState(false)
   const [pendingDraft, setPendingDraft] = useState<SavedDraft | null>(null)
   const [teamSearch, setTeamSearch] = useState('')
+  const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+
+  // Ref to track last saved state for debounced auto-save
+  const lastSavedRef = useRef<string | null>(null)
+  const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Refs for progress tracker scroll-to-section
   const sectionRefs = useRef<Record<StepId, HTMLElement | null>>({
@@ -712,6 +717,179 @@ function App() {
 
   const hasPhoto = Boolean(photo || uploadedPhoto)
 
+  // Auto-create card when cardType is selected (and we don't already have one)
+  useEffect(() => {
+    if (!form.tournamentId || !form.cardType || cardId || editToken) return
+
+    const createCardAsync = async () => {
+      try {
+        const card = await createCard({
+          tournamentId: form.tournamentId,
+          cardType: form.cardType as CardType,
+        })
+        if (!card.editToken) {
+          throw new Error('Edit token is missing')
+        }
+        setCardId(card.id)
+        setEditToken(card.editToken)
+        setSavedCard(card)
+
+        // Persist draft to localStorage (form fields are intentionally empty at this point)
+        saveDraft({
+          cardId: card.id,
+          editToken: card.editToken,
+          tournamentId: form.tournamentId,
+          cardType: form.cardType,
+          form: {
+            teamId: '',
+            position: '',
+            jerseyNumber: '',
+            firstName: '',
+            lastName: '',
+            title: '',
+            caption: '',
+            photographer: '',
+            templateId: '',
+          },
+          savedAt: new Date().toISOString(),
+        })
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Could not create card')
+      }
+    }
+
+    void createCardAsync()
+  }, [form.tournamentId, form.cardType, cardId, editToken])
+
+  // Immediate photo upload when photo is selected
+  useEffect(() => {
+    if (!photo || uploadedPhoto || !cardId || !editToken || uploadStatus === 'uploading') return
+
+    const uploadAsync = async () => {
+      setUploadStatus('uploading')
+      setUploadProgress({ kind: 'original', percent: 0 })
+
+      try {
+        const presign = await requestPresignFor(cardId, photo.file, 'original', editToken)
+        await uploadToS3(presign, photo.file, (percent) =>
+          setUploadProgress({ kind: 'original', percent })
+        )
+
+        const uploaded: UploadedPhoto = {
+          key: presign.key,
+          publicUrl: presign.publicUrl,
+          width: photo.width,
+          height: photo.height,
+        }
+
+        setUploadedPhoto(uploaded)
+        setUploadStatus('uploaded')
+        setUploadProgress(null)
+
+        // Update card with photo metadata
+        await updateCard(cardId, {
+          photo: {
+            originalKey: presign.key,
+            width: photo.width,
+            height: photo.height,
+          },
+        }, editToken)
+      } catch {
+        setUploadStatus('error')
+        setUploadProgress(null)
+        setError('Photo upload failed. Please try again.')
+      }
+    }
+
+    void uploadAsync()
+  }, [photo, uploadedPhoto, cardId, editToken, uploadStatus])
+
+  // Debounced auto-save (2.5s after last change)
+  useEffect(() => {
+    if (!form.tournamentId || !form.cardType || !cardId || !editToken) return
+    if (autoSaveStatus === 'saving' || uploadStatus === 'uploading') return
+
+    const snapshot = JSON.stringify({
+      form,
+      crop: normalizedCrop,
+      photo: uploadedPhoto ? { key: uploadedPhoto.key, width: uploadedPhoto.width, height: uploadedPhoto.height } : null,
+    })
+
+    if (snapshot === lastSavedRef.current) return
+
+    // Clear any existing timeout
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current)
+    }
+
+    autoSaveTimeoutRef.current = setTimeout(() => {
+      // Double-check conditions haven't changed
+      if (!cardId || !editToken) return
+
+      setAutoSaveStatus('saving')
+
+      const payload: SavePayload = {
+        templateId: toOptional(form.templateId),
+        teamId: toOptional(form.teamId),
+        teamName: selectedTeam?.name,
+        position: toOptional(form.position),
+        jerseyNumber: toOptional(form.jerseyNumber),
+        firstName: toOptional(form.firstName),
+        lastName: toOptional(form.lastName),
+        title: toOptional(form.title),
+        caption: toOptional(form.caption),
+        photographer: toOptional(form.photographer),
+      }
+
+      if (normalizedCrop) {
+        payload.photo = { crop: normalizedCrop }
+      }
+
+      updateCard(cardId, payload, editToken)
+        .then((updatedCard) => {
+          setSavedCard(updatedCard)
+          lastSavedRef.current = snapshot
+          setAutoSaveStatus('saved')
+
+          // Update localStorage with latest state
+          saveDraft({
+            cardId,
+            editToken,
+            tournamentId: form.tournamentId,
+            cardType: form.cardType,
+            form: {
+              teamId: form.teamId,
+              position: form.position,
+              jerseyNumber: form.jerseyNumber,
+              firstName: form.firstName,
+              lastName: form.lastName,
+              title: form.title,
+              caption: form.caption,
+              photographer: form.photographer,
+              templateId: form.templateId,
+            },
+            photo: uploadedPhoto ? {
+              key: uploadedPhoto.key,
+              width: uploadedPhoto.width,
+              height: uploadedPhoto.height,
+              crop: normalizedCrop ?? undefined,
+            } : undefined,
+            savedAt: new Date().toISOString(),
+          })
+        })
+        .catch((err) => {
+          setAutoSaveStatus('error')
+          setError(err instanceof Error ? err.message : 'Auto-save failed')
+        })
+    }, 2500)
+
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current)
+      }
+    }
+  }, [form, normalizedCrop, uploadedPhoto, cardId, editToken, autoSaveStatus, uploadStatus, selectedTeam?.name])
+
   // Calculate current step for progress tracker
   const currentStep = useMemo(() => {
     if (!form.cardType) return 0
@@ -868,68 +1046,6 @@ function App() {
     selectedTeam,
   ])
 
-  const saveMutation = useMutation({
-    mutationFn: async () => {
-      setError(null)
-
-      const payload = buildPayload()
-
-      // Step 1: Create or get card ID
-      const { id: currentCardId, editToken: currentEditToken } = await ensureCard(payload)
-
-      // Step 2: Upload photo if we have a new one that hasn't been uploaded
-      let photoPayload: SavePayload['photo'] = undefined
-
-      if (photo && !uploadedPhoto) {
-        const uploaded = await uploadOriginalPhoto(currentCardId, currentEditToken)
-        photoPayload = buildPhotoPayload(uploaded, normalizedCrop)
-      } else if (uploadedPhoto) {
-        // Photo already uploaded, just update crop
-        photoPayload = buildPhotoPayload(uploadedPhoto, normalizedCrop)
-      } else if (normalizedCrop) {
-        // Just crop, no photo
-        photoPayload = buildPhotoPayload(null, normalizedCrop)
-      }
-
-      if (photoPayload) {
-        payload.photo = photoPayload
-      }
-
-      // Step 3: Update card with all data
-      const updatedCard = await updateCard(currentCardId, buildUpdatePayload(payload), currentEditToken)
-      return updatedCard
-    },
-    onSuccess: (data) => {
-      setSavedCard(data)
-      if (data.editToken) setEditToken(data.editToken)
-
-      // Update draft in localStorage with latest form data
-      if (data.id && data.editToken && form.tournamentId && form.cardType) {
-        saveDraft({
-          cardId: data.id,
-          editToken: data.editToken,
-          tournamentId: form.tournamentId,
-          cardType: form.cardType,
-          form: {
-            teamId: form.teamId,
-            position: form.position,
-            jerseyNumber: form.jerseyNumber,
-            firstName: form.firstName,
-            lastName: form.lastName,
-            title: form.title,
-            caption: form.caption,
-            photographer: form.photographer,
-            templateId: form.templateId,
-          },
-          savedAt: new Date().toISOString(),
-        })
-      }
-    },
-    onError: (err) => {
-      setError(err instanceof Error ? err.message : 'Something went wrong')
-    },
-  })
-
   const submitMutation = useMutation({
     mutationFn: async () => {
       setHasEdited(true)
@@ -997,12 +1113,10 @@ function App() {
     if (submitStatus === 'submitting') return { message: 'Submitting card...', tone: 'warning' as const }
     if (submitStatus === 'done') return { message: 'Card submitted successfully!', tone: 'success' as const }
 
-    if (saveMutation.isPending) {
-      if (uploadStatus === 'uploading') return { message: 'Uploading photo...', tone: 'warning' as const }
-      return { message: 'Saving draft...', tone: 'warning' as const }
-    }
+    if (uploadStatus === 'uploading') return { message: 'Uploading photo...', tone: 'warning' as const }
+    if (autoSaveStatus === 'saving') return { message: 'Saving...', tone: 'warning' as const }
+    if (autoSaveStatus === 'saved') return { message: 'Draft saved', tone: 'success' as const }
 
-    if (saveMutation.isSuccess) return { message: 'Draft saved', tone: 'success' as const }
     if (hasEdited && Object.keys(validationErrors).length > 0) {
       return { message: 'Complete required fields to submit', tone: 'error' as const }
     }
@@ -1012,18 +1126,11 @@ function App() {
     error,
     helloQuery.error,
     submitStatus,
-    saveMutation.isPending,
-    saveMutation.isSuccess,
+    autoSaveStatus,
     uploadStatus,
     hasEdited,
     validationErrors,
   ])
-
-  const saveButtonLabel = saveMutation.isPending
-    ? uploadStatus === 'uploading'
-      ? 'Uploading...'
-      : 'Saving...'
-    : 'Save Draft'
 
   const submitButtonLabel = submitMutation.isPending ? 'Submitting...' : 'Submit Card'
 
@@ -1062,7 +1169,7 @@ function App() {
     })
   }
 
-  const handleResumeDraft = useCallback(() => {
+  const handleResumeDraft = useCallback(async () => {
     if (!pendingDraft) return
 
     // Restore card identifiers
@@ -1076,6 +1183,33 @@ function App() {
       ...pendingDraft.form,
     })
     setSelectedTournamentId(pendingDraft.tournamentId)
+
+    // Try to restore photo from S3 if we have photo metadata
+    if (pendingDraft.photo) {
+      try {
+        const res = await fetch(api(`/cards/${pendingDraft.cardId}/photo-url`), {
+          headers: { 'X-Edit-Token': pendingDraft.editToken },
+        })
+        if (res.ok) {
+          const { url, width, height, crop } = await res.json()
+          setUploadedPhoto({
+            key: pendingDraft.photo.key,
+            publicUrl: url,
+            width: width ?? pendingDraft.photo.width,
+            height: height ?? pendingDraft.photo.height,
+          })
+          setUploadStatus('uploaded')
+          // Restore crop from server or localStorage
+          const restoredCrop = crop ?? pendingDraft.photo.crop
+          if (restoredCrop) {
+            setNormalizedCrop(restoredCrop)
+          }
+        }
+      } catch {
+        // Photo restoration failed, user will need to re-upload
+        // Don't show error - just let them continue without photo
+      }
+    }
 
     // Close the modal
     setPendingDraft(null)
@@ -1253,11 +1387,6 @@ function App() {
     setForm(initialForm)
   }
 
-  const handleSaveDraft = () => {
-    setHasEdited(true)
-    saveMutation.mutate()
-  }
-
   const displayName = useMemo(() => {
     if (form.cardType === 'rare') {
       const title = form.title.trim()
@@ -1271,7 +1400,9 @@ function App() {
   }, [form.cardType, form.firstName, form.lastName, form.title])
 
   // Use S3 URL if uploaded, otherwise local blob URL
-  const uploadedCropperUrl = uploadedPhoto?.publicUrl ? media(uploadedPhoto.publicUrl) : null
+  // For signed S3 URLs (absolute), pass through; for relative paths, use media()
+  const resolveMediaUrl = (url: string) => (/^https?:/i.test(url) ? url : media(url))
+  const uploadedCropperUrl = uploadedPhoto?.publicUrl ? resolveMediaUrl(uploadedPhoto.publicUrl) : null
   const cropperImageUrl = photo?.localUrl ?? uploadedCropperUrl
 
   const buildCardForRender = useCallback(
@@ -1381,9 +1512,7 @@ function App() {
             <p className="modal-description">
               You have an unsaved draft from {new Date(pendingDraft.savedAt).toLocaleString()}.
               Would you like to continue where you left off?
-            </p>
-            <p className="mt-3 text-xs text-[var(--text-muted)]">
-              Note: You will need to re-upload your photo.
+              {pendingDraft.photo && ' Your photo will be restored automatically.'}
             </p>
             <div className="mt-6 flex gap-3">
               <button
@@ -1407,7 +1536,24 @@ function App() {
       <header className="studio-header">
         <div className="mx-auto flex max-w-7xl items-center justify-between">
           <div className="flex items-center gap-4">
-            <h1 className="text-lg font-bold text-[var(--text-primary)]">Card Studio</h1>
+            {/* Mobile: show tournament name when selected, otherwise Card Studio */}
+            {form.tournamentId ? (
+              <>
+                <h1 className="text-lg font-bold text-[var(--text-primary)] md:hidden">
+                  {tournamentConfig?.name ?? form.tournamentId}
+                </h1>
+                <button
+                  type="button"
+                  onClick={handleTournamentReset}
+                  className="text-sm text-[var(--accent-primary)] hover:underline md:hidden"
+                >
+                  Change
+                </button>
+                <h1 className="hidden text-lg font-bold text-[var(--text-primary)] md:block">Card Studio</h1>
+              </>
+            ) : (
+              <h1 className="text-lg font-bold text-[var(--text-primary)]">Card Studio</h1>
+            )}
             <span className="hidden text-sm text-[var(--text-muted)] sm:inline">Create your trading card</span>
           </div>
 
@@ -1471,18 +1617,18 @@ function App() {
                 onClick={() => handleStepClick(index)}
                 className={`flex flex-col items-center gap-1 px-1 transition
                   ${index < currentStep
-                    ? 'text-[var(--accent-primary)]'
+                    ? 'text-[var(--accent-success)]'
                     : index === currentStep
-                      ? 'text-[var(--accent-secondary)]'
+                      ? 'text-[var(--accent-primary)]'
                       : 'text-[var(--text-muted)]'
                   }`}
                 aria-label={step.label}
               >
                 <span className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-medium
                   ${index < currentStep
-                    ? 'bg-[var(--accent-primary)] text-white'
+                    ? 'bg-[var(--accent-success)] text-white'
                     : index === currentStep
-                      ? 'bg-[var(--accent-secondary)] text-white'
+                      ? 'bg-[var(--accent-primary)] text-white'
                       : 'bg-[var(--bg-tertiary)]'
                   }`}>
                   {index < currentStep ? '✓' : index + 1}
@@ -1494,7 +1640,7 @@ function App() {
         </div>
       )}
 
-      <main className="mx-auto max-w-7xl px-6 py-8">
+      <main className="mx-auto max-w-7xl px-6 py-8 pb-24 md:pb-8">
         {!form.tournamentId ? (
           /* Tournament Selection */
           <div className="mx-auto max-w-lg">
@@ -1540,10 +1686,131 @@ function App() {
         ) : (
           /* Main Studio Layout */
           <div className="grid gap-8 lg:grid-cols-[400px_1fr]">
+            {/* Sidebar - Setup */}
+            <div className="studio-panel overflow-hidden lg:col-start-1 lg:row-start-1">
+              {/* Card Type Section */}
+              <div
+                ref={(el) => { sectionRefs.current.type = el }}
+                className="sidebar-section scroll-mt-20"
+              >
+                <h3 className="sidebar-section-title">Card Type</h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="studio-label">
+                      Type <span className="studio-label-required">*</span>
+                    </label>
+                    <select
+                      ref={(el) => { fieldRefs.current.cardType = el }}
+                      value={form.cardType}
+                      onChange={handleCardTypeChange}
+                      disabled={!tournamentConfig}
+                      className={`studio-input studio-select ${hasEdited && validationErrors.cardType ? 'has-error' : ''}`}
+                    >
+                      <option value="">Select type</option>
+                      {tournamentConfig?.cardTypes
+                        .filter((entry) => entry.enabled)
+                        .map((entry) => (
+                          <option key={entry.type} value={entry.type}>
+                            {entry.label}
+                          </option>
+                        ))}
+                    </select>
+                    {hasEdited && validationErrors.cardType && (
+                      <p className="studio-error">{validationErrors.cardType}</p>
+                    )}
+                  </div>
+
+                  {/* Style - only show when multiple templates available */}
+                  {(templateOptions.length > 1 || hasUnknownTemplate) && (
+                    <div>
+                      <label className="studio-label">Style</label>
+                      <select
+                        value={form.templateId}
+                        onChange={handleFieldChange('templateId')}
+                        className="studio-input studio-select"
+                      >
+                        <option value="">{`Default (${defaultTemplateLabel})`}</option>
+                        {hasUnknownTemplate && (
+                          <option value={form.templateId}>{`Custom (${form.templateId})`}</option>
+                        )}
+                        {templateOptions.map((template) => (
+                          <option key={template.id} value={template.id}>
+                            {template.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Photo Section */}
+              <div
+                ref={(el) => { sectionRefs.current.photo = el }}
+                className="sidebar-section scroll-mt-20"
+              >
+                <h3 className="sidebar-section-title">Photo</h3>
+
+                <div
+                  ref={(el) => { fieldRefs.current.uploadZone = el }}
+                  tabIndex={0}
+                  className={`upload-zone ${isDragging ? 'is-dragging' : ''}`}
+                  onClick={handleUploadClick}
+                  onDrop={handleDrop}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                >
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="sr-only"
+                    onChange={handleFileChange}
+                    ref={fileInputRef}
+                  />
+                  <div className="upload-zone-icon">
+                    <IconUpload />
+                  </div>
+                  <div className="upload-zone-title">
+                    {photo ? 'Replace photo' : 'Drop photo here'}
+                  </div>
+                  <div className="upload-zone-hint">
+                    or click to browse (JPG, PNG, WebP)
+                  </div>
+                  {photo && (
+                    <div className="upload-zone-file">
+                      {photo.file.name} - {photo.width} x {photo.height}px
+                    </div>
+                  )}
+                </div>
+
+                {photoError && <p className="studio-error">{photoError}</p>}
+                {hasEdited && validationErrors.photo && !photoError && (
+                  <p className="studio-error">{validationErrors.photo}</p>
+                )}
+
+                <div className="mt-4">
+                  <label className="studio-label">
+                    Photo Credit <span className="studio-label-required">*</span>
+                  </label>
+                  <input
+                    ref={(el) => { fieldRefs.current.photographer = el }}
+                    value={form.photographer}
+                    onChange={handleFieldChange('photographer')}
+                    maxLength={MAX_PHOTOGRAPHER_LENGTH}
+                    className={`studio-input ${hasEdited && validationErrors.photographer ? 'has-error' : ''}`}
+                    placeholder="Photographer name"
+                  />
+                  {hasEdited && validationErrors.photographer && (
+                    <p className="studio-error">{validationErrors.photographer}</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
             {/* Canvas Area */}
-            <div className="space-y-6 lg:order-2 order-2">
-              {/* Toolbar */}
-              <div className="studio-panel flex items-center justify-between px-4 py-3">
+            <div className="space-y-6 lg:col-start-2 lg:row-span-2">
+              {/* Toolbar - desktop only */}
+              <div className="studio-panel hidden items-center justify-between px-4 py-3 md:flex">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium text-[var(--text-primary)]">
                     {tournamentConfig?.name ?? form.tournamentId}
@@ -1557,14 +1824,6 @@ function App() {
                   </button>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleSaveDraft}
-                    disabled={saveMutation.isPending}
-                    className="studio-btn studio-btn-secondary studio-btn-sm"
-                  >
-                    {saveButtonLabel}
-                  </button>
                   <button
                     type="button"
                     onClick={() => submitMutation.mutate()}
@@ -1747,64 +2006,8 @@ function App() {
               </div>
             </div>
 
-            {/* Sidebar - Form First */}
-            <div className="studio-panel overflow-hidden lg:order-1 order-1">
-              {/* Card Type Section */}
-              <div
-                ref={(el) => { sectionRefs.current.type = el }}
-                className="sidebar-section scroll-mt-20"
-              >
-                <h3 className="sidebar-section-title">Card Type</h3>
-                <div className="space-y-4">
-                  <div>
-                    <label className="studio-label">
-                      Type <span className="studio-label-required">*</span>
-                    </label>
-                    <select
-                      ref={(el) => { fieldRefs.current.cardType = el }}
-                      value={form.cardType}
-                      onChange={handleCardTypeChange}
-                      disabled={!tournamentConfig}
-                      className={`studio-input studio-select ${hasEdited && validationErrors.cardType ? 'has-error' : ''}`}
-                    >
-                      <option value="">Select type</option>
-                      {tournamentConfig?.cardTypes
-                        .filter((entry) => entry.enabled)
-                        .map((entry) => (
-                          <option key={entry.type} value={entry.type}>
-                            {entry.label}
-                          </option>
-                        ))}
-                    </select>
-                    {hasEdited && validationErrors.cardType && (
-                      <p className="studio-error">{validationErrors.cardType}</p>
-                    )}
-                  </div>
-
-                  {/* Style - only show when multiple templates available */}
-                  {(templateOptions.length > 1 || hasUnknownTemplate) && (
-                    <div>
-                      <label className="studio-label">Style</label>
-                      <select
-                        value={form.templateId}
-                        onChange={handleFieldChange('templateId')}
-                        className="studio-input studio-select"
-                      >
-                        <option value="">{`Default (${defaultTemplateLabel})`}</option>
-                        {hasUnknownTemplate && (
-                          <option value={form.templateId}>{`Custom (${form.templateId})`}</option>
-                        )}
-                        {templateOptions.map((template) => (
-                          <option key={template.id} value={template.id}>
-                            {template.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                </div>
-              </div>
-
+            {/* Sidebar - Details & Submit */}
+            <div className="studio-panel overflow-hidden lg:col-start-1 lg:row-start-2">
               {/* Details Section */}
               <div
                 ref={(el) => { sectionRefs.current.details = el }}
@@ -1986,68 +2189,6 @@ function App() {
                 </div>
               </div>
 
-              {/* Photo Section */}
-              <div
-                ref={(el) => { sectionRefs.current.photo = el }}
-                className="sidebar-section scroll-mt-20"
-              >
-                <h3 className="sidebar-section-title">Photo</h3>
-
-                <div
-                  ref={(el) => { fieldRefs.current.uploadZone = el }}
-                  tabIndex={0}
-                  className={`upload-zone ${isDragging ? 'is-dragging' : ''}`}
-                  onClick={handleUploadClick}
-                  onDrop={handleDrop}
-                  onDragOver={handleDragOver}
-                  onDragLeave={handleDragLeave}
-                >
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    className="sr-only"
-                    onChange={handleFileChange}
-                    ref={fileInputRef}
-                  />
-                  <div className="upload-zone-icon">
-                    <IconUpload />
-                  </div>
-                  <div className="upload-zone-title">
-                    {photo ? 'Replace photo' : 'Drop photo here'}
-                  </div>
-                  <div className="upload-zone-hint">
-                    or click to browse (JPG, PNG, WebP)
-                  </div>
-                  {photo && (
-                    <div className="upload-zone-file">
-                      {photo.file.name} - {photo.width} x {photo.height}px
-                    </div>
-                  )}
-                </div>
-
-                {photoError && <p className="studio-error">{photoError}</p>}
-                {hasEdited && validationErrors.photo && !photoError && (
-                  <p className="studio-error">{validationErrors.photo}</p>
-                )}
-
-                <div className="mt-4">
-                  <label className="studio-label">
-                    Photo Credit <span className="studio-label-required">*</span>
-                  </label>
-                  <input
-                    ref={(el) => { fieldRefs.current.photographer = el }}
-                    value={form.photographer}
-                    onChange={handleFieldChange('photographer')}
-                    maxLength={MAX_PHOTOGRAPHER_LENGTH}
-                    className={`studio-input ${hasEdited && validationErrors.photographer ? 'has-error' : ''}`}
-                    placeholder="Photographer name"
-                  />
-                  {hasEdited && validationErrors.photographer && (
-                    <p className="studio-error">{validationErrors.photographer}</p>
-                  )}
-                </div>
-              </div>
-
               {/* Submit Section */}
               <div
                 ref={(el) => { sectionRefs.current.submit = el }}
@@ -2057,24 +2198,14 @@ function App() {
                 <p className="mb-4 text-sm text-[var(--text-secondary)]">
                   Ready to create your card? Review the preview and submit.
                 </p>
-                <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={handleSaveDraft}
-                    disabled={saveMutation.isPending}
-                    className="studio-btn studio-btn-secondary flex-1"
-                  >
-                    {saveButtonLabel}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => submitMutation.mutate()}
-                    disabled={!canSubmit}
-                    className="studio-btn studio-btn-success flex-1"
-                  >
-                    {submitButtonLabel}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => submitMutation.mutate()}
+                  disabled={!canSubmit}
+                  className="studio-btn studio-btn-success w-full"
+                >
+                  {submitButtonLabel}
+                </button>
               </div>
 
               {/* Preview Meta */}
@@ -2105,6 +2236,20 @@ function App() {
           </div>
         )}
       </main>
+
+      {/* Mobile Sticky Footer - only when tournament selected */}
+      {form.tournamentId && (
+        <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-[var(--border-light)] bg-white px-4 py-3 md:hidden">
+          <button
+            type="button"
+            onClick={() => submitMutation.mutate()}
+            disabled={!canSubmit}
+            className="studio-btn studio-btn-success w-full"
+          >
+            {submitButtonLabel}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

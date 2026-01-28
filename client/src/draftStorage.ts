@@ -21,6 +21,18 @@ export type SavedDraft = {
     photographer: string
     templateId: string
   }
+  photo?: {
+    key: string
+    width: number
+    height: number
+    crop?: {
+      x: number
+      y: number
+      w: number
+      h: number
+      rotateDeg: 0 | 90 | 180 | 270
+    }
+  }
   savedAt: string
 }
 

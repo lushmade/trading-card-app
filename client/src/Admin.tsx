@@ -114,6 +114,7 @@ export default function Admin() {
   const [renderingCardId, setRenderingCardId] = useState<string | null>(null)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
+  const [activeTab, setActiveTab] = useState<'cards' | 'config' | 'assets'>('cards')
 
   // Check if admin auth is enabled on the server
   const authConfigQuery = useQuery({
@@ -610,19 +611,28 @@ export default function Admin() {
 
   return (
     <div className="app-shell min-h-screen">
-      <div className="mx-auto flex max-w-6xl flex-col gap-8 px-6 py-12">
-        <header className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="font-display text-4xl text-white">Admin Console</h1>
-            <p className="text-sm text-slate-400">
-              Manage tournaments, upload assets, and review submissions.
-            </p>
+      {/* Header */}
+      <header className="studio-header">
+        <div className="mx-auto flex max-w-6xl items-center justify-between">
+          <div className="flex items-center gap-4">
+            <h1 className="text-xl font-bold text-[var(--text-primary)]">Admin Console</h1>
+            <select
+              value={activeTournamentId}
+              onChange={(event) => setActiveTournamentId(event.target.value)}
+              className="rounded-lg border border-[var(--border-light)] bg-[var(--bg-surface)] px-3 py-1.5 text-sm text-[var(--text-primary)]"
+            >
+              {tournamentsQuery.data?.map((tournament) => (
+                <option key={tournament.id} value={tournament.id}>
+                  {tournament.name}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="flex items-center gap-3">
             {authEnabled ? (
               <>
-                <span className="flex items-center gap-1.5 text-xs text-emerald-400">
-                  <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                <span className="flex items-center gap-1.5 text-xs text-[var(--accent-success)]">
+                  <span className="h-2 w-2 rounded-full bg-[var(--accent-success)]" />
                   Authenticated
                 </span>
                 <button
@@ -633,85 +643,368 @@ export default function Admin() {
                     sessionStorage.removeItem('adminPassword')
                     queryClient.invalidateQueries({ queryKey: ['admin-tournaments'] })
                   }}
-                  className="rounded-full border border-white/20 px-3 py-1 text-xs text-slate-400 hover:bg-white/5"
+                  className="studio-btn studio-btn-ghost studio-btn-sm"
                 >
                   Sign out
                 </button>
               </>
             ) : (
-              <span className="flex items-center gap-1.5 text-xs text-amber-400">
-                <span className="h-2 w-2 rounded-full bg-amber-400" />
+              <span className="flex items-center gap-1.5 text-xs text-[var(--accent-warning)]">
+                <span className="h-2 w-2 rounded-full bg-[var(--accent-warning)]" />
                 Auth Disabled
               </span>
             )}
           </div>
-        </header>
+        </div>
+      </header>
 
-        <div className="grid gap-8 lg:grid-cols-[1.1fr_0.9fr]">
-          <section className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-lg font-semibold text-white">Tournament Config</h2>
-              <select
-                value={activeTournamentId}
-                onChange={(event) => setActiveTournamentId(event.target.value)}
-                className="rounded-full border border-white/20 bg-slate-950/50 px-3 py-1 text-xs text-white"
-              >
-                {tournamentsQuery.data?.map((tournament) => (
-                  <option key={tournament.id} value={tournament.id}>
-                    {tournament.name}
-                  </option>
-                ))}
-              </select>
+      {/* Tab Navigation */}
+      <div className="border-b border-[var(--border-light)] bg-[var(--bg-surface)]">
+        <div className="mx-auto flex max-w-6xl gap-1 px-6">
+          {[
+            { id: 'cards' as const, label: 'Cards', count: cardsQuery.data?.length },
+            { id: 'config' as const, label: 'Tournament Config' },
+            { id: 'assets' as const, label: 'Assets' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`relative px-4 py-3 text-sm font-medium transition-colors ${
+                activeTab === tab.id
+                  ? 'text-[var(--accent-primary)]'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              {tab.label}
+              {tab.count !== undefined && (
+                <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-xs ${
+                  activeTab === tab.id
+                    ? 'bg-[var(--accent-primary)] text-white'
+                    : 'bg-[var(--bg-muted)] text-[var(--text-muted)]'
+                }`}>
+                  {tab.count}
+                </span>
+              )}
+              {activeTab === tab.id && (
+                <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-[var(--accent-primary)]" />
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="mx-auto max-w-6xl px-6 py-6">
+
+        {/* Cards Tab */}
+        {activeTab === 'cards' && (
+          <section className="studio-panel p-6">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+              <h2 className="text-lg font-semibold text-[var(--text-primary)]">Card Review</h2>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const cardsWithRenders = cardsQuery.data?.filter((c) => c.renderKey) ?? []
+                    if (cardsWithRenders.length === 0) return
+
+                    const zip = new JSZip()
+
+                    for (const card of cardsWithRenders) {
+                      const name = card.cardType === 'rare'
+                        ? (card.title ?? 'rare-card')
+                        : [card.firstName, card.lastName].filter(Boolean).join('-') || 'card'
+                      const filename = `${safeZipName(name)}-${card.id.slice(0, 8)}.png`
+
+                      const res = await fetch(api(`/admin/cards/${card.id}/download-url`), {
+                        headers: authOnlyHeaders,
+                      })
+                      if (res.ok) {
+                        const { url: downloadUrl } = await res.json()
+                        const imageRes = await fetch(downloadUrl)
+                        if (imageRes.ok) {
+                          const blob = await imageRes.blob()
+                          zip.file(filename, blob)
+                        }
+                      }
+                    }
+
+                    const zipBlob = await zip.generateAsync({ type: 'blob' })
+                    const url = URL.createObjectURL(zipBlob)
+                    const link = document.createElement('a')
+                    link.href = url
+                    link.download = `cards-${statusFilter}-${new Date().toISOString().slice(0, 10)}.zip`
+                    link.click()
+                    URL.revokeObjectURL(url)
+                  }}
+                  disabled={!cardsQuery.data?.some((c) => c.renderKey)}
+                  className="studio-btn studio-btn-secondary studio-btn-sm disabled:opacity-50"
+                >
+                  Download All
+                </button>
+                <select
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value)}
+                  className="rounded-lg border border-[var(--border-light)] bg-[var(--bg-surface)] px-3 py-1.5 text-sm text-[var(--text-primary)]"
+                >
+                  <option value="draft">Draft</option>
+                  <option value="submitted">Submitted</option>
+                  <option value="rendered">Rendered</option>
+                </select>
+                {statusFilter === 'draft' && cardsQuery.data && cardsQuery.data.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkDeleteConfirm(true)}
+                    className="studio-btn studio-btn-sm border-[var(--accent-error)] text-[var(--accent-error)] hover:bg-red-50"
+                  >
+                    Delete All ({cardsQuery.data.length})
+                  </button>
+                )}
+              </div>
             </div>
-            <textarea
-              value={configDraft}
-              onChange={(event) => setConfigDraft(event.target.value)}
-              className="mt-4 h-72 w-full rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 text-xs text-slate-200"
-            />
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={() => saveConfigMutation.mutate()}
-                className="rounded-full bg-white px-4 py-2 text-xs font-semibold text-slate-900"
-              >
-                Save Draft
-              </button>
-              <button
-                type="button"
-                onClick={() => publishMutation.mutate()}
-                className="rounded-full border border-emerald-500/40 px-4 py-2 text-xs text-emerald-300"
-              >
-                Publish
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!configParsed) return
-                  const blob = new Blob([JSON.stringify(configParsed, null, 2)], { type: 'application/json' })
-                  const url = URL.createObjectURL(blob)
-                  const link = document.createElement('a')
-                  link.href = url
-                  link.download = `${activeTournamentId}-config.json`
-                  link.click()
-                  URL.revokeObjectURL(url)
-                }}
-                className="rounded-full border border-white/20 px-4 py-2 text-xs text-white"
-              >
-                Download JSON
-              </button>
-            </div>
+
+            {/* Bulk Delete Confirmation Dialog */}
+            {showBulkDeleteConfirm && cardsQuery.data && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                <div className="mx-4 w-full max-w-md rounded-xl border border-[var(--border-light)] bg-[var(--bg-surface)] p-6 shadow-xl">
+                  <h3 className="text-lg font-semibold text-[var(--text-primary)]">Delete All Drafts?</h3>
+                  <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                    This will permanently delete {cardsQuery.data.length} draft card{cardsQuery.data.length === 1 ? '' : 's'}. This action cannot be undone.
+                  </p>
+                  <div className="mt-6 flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setShowBulkDeleteConfirm(false)}
+                      className="studio-btn studio-btn-secondary"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => bulkDeleteMutation.mutate(cardsQuery.data.map((c) => c.id))}
+                      disabled={bulkDeleteMutation.isPending}
+                      className="studio-btn bg-[var(--accent-error)] text-white hover:opacity-90 disabled:opacity-50"
+                    >
+                      {bulkDeleteMutation.isPending ? 'Deleting...' : 'Delete All'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Single Delete Confirmation Dialog */}
+            {pendingDeleteId && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+                <div className="mx-4 w-full max-w-md rounded-xl border border-[var(--border-light)] bg-[var(--bg-surface)] p-6 shadow-xl">
+                  <h3 className="text-lg font-semibold text-[var(--text-primary)]">Delete Draft?</h3>
+                  <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                    This will permanently delete this draft card. This action cannot be undone.
+                  </p>
+                  <div className="mt-6 flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setPendingDeleteId(null)}
+                      className="studio-btn studio-btn-secondary"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteMutation.mutate(pendingDeleteId)}
+                      disabled={deleteMutation.isPending}
+                      className="studio-btn bg-[var(--accent-error)] text-white hover:opacity-90 disabled:opacity-50"
+                    >
+                      {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {renderMutation.isError && (
+              <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-[var(--accent-error)]">
+                {renderMutation.error instanceof Error ? renderMutation.error.message : 'Render failed'}
+              </div>
+            )}
+
+            {cardsQuery.data?.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <div className="text-4xl mb-3">📭</div>
+                <p className="text-[var(--text-secondary)]">No {statusFilter} cards found</p>
+              </div>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {cardsQuery.data?.map((card) => {
+                  const defaultTemplateId = resolveTemplateId(
+                    { cardType: card.cardType },
+                    activeConfig ?? undefined
+                  )
+                  const defaultTemplateLabel = templateLabelFor(defaultTemplateId)
+                  const hasUnknownTemplate =
+                    Boolean(card.templateId) &&
+                    !templateOptions.some((template) => template.id === card.templateId)
+                  const isRendering = renderingCardId === card.id
+
+                  return (
+                    <div key={card.id} className="rounded-xl border border-[var(--border-light)] bg-[var(--bg-surface)] p-4">
+                      <div className="flex items-start justify-between mb-3">
+                        <div>
+                          <span className="inline-block rounded-full bg-[var(--bg-muted)] px-2 py-0.5 text-xs font-medium text-[var(--text-secondary)] capitalize">
+                            {card.cardType}
+                          </span>
+                          <h3 className="mt-1 font-medium text-[var(--text-primary)]">
+                            {cardDisplayName(card)}
+                          </h3>
+                          <p className="text-xs text-[var(--text-muted)] font-mono">
+                            {card.id.slice(0, 8)}...
+                          </p>
+                        </div>
+                      </div>
+
+                      <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                        Template
+                      </label>
+                      <select
+                        value={card.templateId ?? ''}
+                        onChange={(event) =>
+                          templateMutation.mutate({
+                            id: card.id,
+                            templateId: event.target.value ? event.target.value : null,
+                          })
+                        }
+                        className="w-full rounded-lg border border-[var(--border-light)] bg-[var(--bg-surface)] px-2 py-1.5 text-sm text-[var(--text-primary)]"
+                      >
+                        <option value="">{`Default (${defaultTemplateLabel})`}</option>
+                        {hasUnknownTemplate ? (
+                          <option value={card.templateId ?? ''}>{`Custom (${card.templateId})`}</option>
+                        ) : null}
+                        {templateOptions.map((template) => (
+                          <option key={template.id} value={template.id}>
+                            {template.label}
+                          </option>
+                        ))}
+                      </select>
+
+                      {card.renderKey ? (
+                        <img
+                          src={assetUrlForKey(card.renderKey)}
+                          alt="Rendered card"
+                          className="mt-3 w-full rounded-lg border border-[var(--border-light)]"
+                        />
+                      ) : (
+                        <div className="mt-3 flex aspect-[825/1125] items-center justify-center rounded-lg border border-dashed border-[var(--border-medium)] bg-[var(--bg-muted)] text-xs text-[var(--text-muted)]">
+                          No render
+                        </div>
+                      )}
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {card.status !== 'draft' ? (
+                          <button
+                            type="button"
+                            onClick={() => renderMutation.mutate(card)}
+                            disabled={isRendering || renderMutation.isPending}
+                            className="studio-btn studio-btn-primary studio-btn-sm disabled:opacity-50"
+                          >
+                            {isRendering ? 'Rendering...' : 'Render'}
+                          </button>
+                        ) : null}
+                        {card.status === 'draft' ? (
+                          <button
+                            type="button"
+                            onClick={() => setPendingDeleteId(card.id)}
+                            className="studio-btn studio-btn-sm text-[var(--accent-error)] border-[var(--accent-error)] hover:bg-red-50"
+                          >
+                            Delete
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </section>
+        )}
 
-          <section className="space-y-6">
-            <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
-              <h3 className="text-sm uppercase tracking-[0.2em] text-slate-400">Upload Team Logos</h3>
-              <p className="mt-2 text-xs text-slate-400">
+        {/* Config Tab */}
+        {activeTab === 'config' && (
+          <div className="grid gap-6 lg:grid-cols-2">
+            <section className="studio-panel p-6">
+              <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-4">Tournament JSON</h2>
+              <textarea
+                value={configDraft}
+                onChange={(event) => setConfigDraft(event.target.value)}
+                className="h-96 w-full rounded-lg border border-[var(--border-light)] bg-[var(--bg-muted)] px-4 py-3 text-xs font-mono text-[var(--text-primary)]"
+              />
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => saveConfigMutation.mutate()}
+                  disabled={saveConfigMutation.isPending}
+                  className="studio-btn studio-btn-primary"
+                >
+                  {saveConfigMutation.isPending ? 'Saving...' : 'Save Draft'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => publishMutation.mutate()}
+                  disabled={publishMutation.isPending}
+                  className="studio-btn studio-btn-success"
+                >
+                  {publishMutation.isPending ? 'Publishing...' : 'Publish'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!configParsed) return
+                    const blob = new Blob([JSON.stringify(configParsed, null, 2)], { type: 'application/json' })
+                    const url = URL.createObjectURL(blob)
+                    const link = document.createElement('a')
+                    link.href = url
+                    link.download = `${activeTournamentId}-config.json`
+                    link.click()
+                    URL.revokeObjectURL(url)
+                  }}
+                  className="studio-btn studio-btn-secondary"
+                >
+                  Download JSON
+                </button>
+              </div>
+              {saveConfigMutation.isError && (
+                <p className="mt-2 text-sm text-[var(--accent-error)]">
+                  {saveConfigMutation.error instanceof Error ? saveConfigMutation.error.message : 'Save failed'}
+                </p>
+              )}
+              {publishMutation.isError && (
+                <p className="mt-2 text-sm text-[var(--accent-error)]">
+                  {publishMutation.error instanceof Error ? publishMutation.error.message : 'Publish failed'}
+                </p>
+              )}
+            </section>
+
+            {activeConfig && (
+              <TemplateEditor
+                config={activeConfig}
+                onChange={(next) => setConfigDraft(JSON.stringify(next, null, 2))}
+                uploadOverlay={uploadOverlay}
+                onSave={() => saveConfigMutation.mutate()}
+                isSaving={saveConfigMutation.isPending}
+              />
+            )}
+          </div>
+        )}
+
+        {/* Assets Tab */}
+        {activeTab === 'assets' && (
+          <div className="grid gap-6 lg:grid-cols-2">
+            <section className="studio-panel p-6">
+              <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2">Upload Team Logos</h2>
+              <p className="mt-2 text-xs text-[var(--text-secondary)]">
                 Upload a ZIP file containing team logos. Each PNG file should be named with the team ID
-                (e.g., <code className="text-emerald-400">boston-kraken.png</code>).
+                (e.g., <code className="text-[var(--accent-primary)] font-medium">boston-kraken.png</code>).
               </p>
-              <div className="mt-4 rounded-xl border border-dashed border-white/20 bg-slate-950/40 p-4">
-                <p className="text-xs text-slate-500 mb-2">Expected structure:</p>
-                <pre className="text-xs text-slate-400 font-mono">
+              <div className="mt-4 rounded-xl border border-dashed border-[var(--border-light)] bg-[var(--bg-muted)] p-4">
+                <p className="text-xs text-[var(--text-tertiary)] mb-2">Expected structure:</p>
+                <pre className="text-xs text-[var(--text-secondary)] font-mono">
 {`logos.zip
 ├── team-id-1.png
 ├── team-id-2.png
@@ -721,7 +1014,7 @@ export default function Admin() {
               <input
                 type="file"
                 accept=".zip"
-                className="mt-4 text-xs text-slate-300"
+                className="mt-4 text-xs text-[var(--text-primary)]"
                 onChange={(event) => {
                   setLogosZipFile(event.target.files?.[0] ?? null)
                   setLogosZipResult(null)
@@ -731,24 +1024,24 @@ export default function Admin() {
                 type="button"
                 onClick={() => logosZipMutation.mutate()}
                 disabled={!logosZipFile || logosZipMutation.isPending}
-                className="mt-3 rounded-full bg-white px-4 py-2 text-xs font-semibold text-slate-900 disabled:opacity-50"
+                className="studio-btn studio-btn-primary mt-3"
               >
                 {logosZipMutation.isPending ? 'Uploading...' : 'Upload Logos ZIP'}
               </button>
               {logosZipMutation.isError && (
-                <p className="mt-2 text-xs text-rose-400">
+                <p className="mt-2 text-xs text-[var(--accent-error)]">
                   {logosZipMutation.error instanceof Error ? logosZipMutation.error.message : 'Upload failed'}
                 </p>
               )}
               {logosZipResult && (
                 <div className="mt-4 space-y-2 text-xs">
-                  <p className="text-emerald-400">
+                  <p className="text-[var(--accent-success)]">
                     Uploaded: {logosZipResult.uploaded.length} logos
                   </p>
                   {logosZipResult.skipped.length > 0 && (
-                    <div className="text-amber-400">
+                    <div className="text-[var(--accent-warning)]">
                       <p>Skipped {logosZipResult.skipped.length} files:</p>
-                      <ul className="mt-1 ml-4 list-disc text-slate-400">
+                      <ul className="mt-1 ml-4 list-disc text-[var(--text-secondary)]">
                         {logosZipResult.skipped.slice(0, 5).map((s, i) => (
                           <li key={i}>{s.filename}: {s.reason}</li>
                         ))}
@@ -759,9 +1052,9 @@ export default function Admin() {
                     </div>
                   )}
                   {logosZipResult.missingLogos.length > 0 && (
-                    <div className="text-rose-400">
+                    <div className="text-[var(--accent-error)]">
                       <p>Teams still missing logos: {logosZipResult.missingLogos.length}</p>
-                      <ul className="mt-1 ml-4 list-disc text-slate-400">
+                      <ul className="mt-1 ml-4 list-disc text-[var(--text-secondary)]">
                         {logosZipResult.missingLogos.slice(0, 5).map((id) => (
                           <li key={id}>{id}</li>
                         ))}
@@ -773,16 +1066,16 @@ export default function Admin() {
                   )}
                 </div>
               )}
-            </div>
+            </section>
 
-            <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
-              <h3 className="text-sm uppercase tracking-[0.2em] text-slate-400">Tournament Bundle</h3>
-              <p className="mt-2 text-xs text-slate-400">
+            <section className="studio-panel p-6">
+              <h2 className="text-lg font-semibold text-[var(--text-primary)] mb-2">Tournament Bundle</h2>
+              <p className="mt-2 text-xs text-[var(--text-secondary)]">
                 Import or export a complete tournament as a ZIP bundle including config and all assets.
               </p>
-              <div className="mt-4 rounded-xl border border-dashed border-white/20 bg-slate-950/40 p-4">
-                <p className="text-xs text-slate-500 mb-2">Bundle structure:</p>
-                <pre className="text-xs text-slate-400 font-mono">
+              <div className="mt-4 rounded-xl border border-dashed border-[var(--border-light)] bg-[var(--bg-muted)] p-4">
+                <p className="text-xs text-[var(--text-tertiary)] mb-2">Bundle structure:</p>
+                <pre className="text-xs text-[var(--text-secondary)] font-mono">
 {`tournament.zip
 ├── config.json          (required)
 ├── tournament-logo.png  (optional)
@@ -808,17 +1101,17 @@ export default function Admin() {
                     link.click()
                     URL.revokeObjectURL(url)
                   }}
-                  className="rounded-full border border-emerald-500/40 px-4 py-2 text-xs text-emerald-300 hover:bg-emerald-500/10"
+                  className="studio-btn studio-btn-secondary"
                 >
                   Export Bundle
                 </button>
               </div>
-              <div className="mt-4 border-t border-white/10 pt-4">
-                <p className="text-xs text-slate-500 mb-2">Import a new tournament:</p>
+              <div className="mt-4 border-t border-[var(--border-light)] pt-4">
+                <p className="text-xs text-[var(--text-tertiary)] mb-2">Import a new tournament:</p>
                 <input
                   type="file"
                   accept=".zip"
-                  className="text-xs text-slate-300"
+                  className="text-xs text-[var(--text-primary)]"
                   onChange={(event) => {
                     setBundleFile(event.target.files?.[0] ?? null)
                     setBundleResult(null)
@@ -828,259 +1121,34 @@ export default function Admin() {
                   type="button"
                   onClick={() => bundleImportMutation.mutate()}
                   disabled={!bundleFile || bundleImportMutation.isPending}
-                  className="mt-3 rounded-full bg-white px-4 py-2 text-xs font-semibold text-slate-900 disabled:opacity-50"
+                  className="studio-btn studio-btn-primary mt-3"
                 >
                   {bundleImportMutation.isPending ? 'Importing...' : 'Import Bundle'}
                 </button>
                 {bundleImportMutation.isError && (
-                  <p className="mt-2 text-xs text-rose-400">
+                  <p className="mt-2 text-xs text-[var(--accent-error)]">
                     {bundleImportMutation.error instanceof Error ? bundleImportMutation.error.message : 'Import failed'}
                   </p>
                 )}
                 {bundleResult && (
                   <div className="mt-4 space-y-2 text-xs">
-                    <p className="text-emerald-400">
+                    <p className="text-[var(--accent-success)]">
                       Imported tournament: {bundleResult.tournament.name}
                     </p>
-                    <p className="text-slate-400">
+                    <p className="text-[var(--text-secondary)]">
                       Assets uploaded: {bundleResult.results.assetsUploaded.length}
                     </p>
                     {bundleResult.results.assetsSkipped.length > 0 && (
-                      <p className="text-amber-400">
+                      <p className="text-[var(--accent-warning)]">
                         Skipped: {bundleResult.results.assetsSkipped.join(', ')}
                       </p>
                     )}
                   </div>
                 )}
               </div>
-            </div>
-          </section>
-        </div>
-
-        {activeConfig ? (
-          <TemplateEditor
-            config={activeConfig}
-            onChange={(next) => setConfigDraft(JSON.stringify(next, null, 2))}
-            uploadOverlay={uploadOverlay}
-            onSave={() => saveConfigMutation.mutate()}
-            isSaving={saveConfigMutation.isPending}
-          />
-        ) : (
-          <section className="rounded-3xl border border-white/10 bg-white/5 p-6 text-xs text-slate-400">
-            Fix the tournament JSON to edit templates.
-          </section>
+            </section>
+          </div>
         )}
-
-        <section className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold text-white">Card Review</h2>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={async () => {
-                  const cardsWithRenders = cardsQuery.data?.filter((c) => c.renderKey) ?? []
-                  if (cardsWithRenders.length === 0) return
-
-                  const zip = new JSZip()
-
-                  for (const card of cardsWithRenders) {
-                    const name = card.cardType === 'rare'
-                      ? (card.title ?? 'rare-card')
-                      : [card.firstName, card.lastName].filter(Boolean).join('-') || 'card'
-                    const filename = `${safeZipName(name)}-${card.id.slice(0, 8)}.png`
-
-                    // Use presigned download URL from API to avoid CORS issues
-                    const res = await fetch(api(`/admin/cards/${card.id}/download-url`), {
-                      headers: authOnlyHeaders,
-                    })
-                    if (res.ok) {
-                      const { url: downloadUrl } = await res.json()
-                      const imageRes = await fetch(downloadUrl)
-                      if (imageRes.ok) {
-                        const blob = await imageRes.blob()
-                        zip.file(filename, blob)
-                      }
-                    }
-                  }
-
-                  const zipBlob = await zip.generateAsync({ type: 'blob' })
-                  const url = URL.createObjectURL(zipBlob)
-                  const link = document.createElement('a')
-                  link.href = url
-                  link.download = `cards-${statusFilter}-${new Date().toISOString().slice(0, 10)}.zip`
-                  link.click()
-                  URL.revokeObjectURL(url)
-                }}
-                disabled={!cardsQuery.data?.some((c) => c.renderKey)}
-                className="cursor-pointer rounded-full border border-white/20 px-3 py-1 text-xs text-white disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Download All
-              </button>
-              <select
-                value={statusFilter}
-                onChange={(event) => setStatusFilter(event.target.value)}
-                className="rounded-full border border-white/20 bg-slate-950/50 px-3 py-1 text-xs text-white"
-              >
-                <option value="draft">Draft</option>
-                <option value="submitted">Submitted</option>
-                <option value="rendered">Rendered</option>
-              </select>
-              {statusFilter === 'draft' && cardsQuery.data && cardsQuery.data.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setShowBulkDeleteConfirm(true)}
-                  className="rounded-full border border-rose-500/40 px-3 py-1 text-xs text-rose-300 hover:border-rose-500/60"
-                >
-                  Delete All ({cardsQuery.data.length})
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Bulk Delete Confirmation Dialog */}
-          {showBulkDeleteConfirm && cardsQuery.data && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-              <div className="mx-4 w-full max-w-md rounded-2xl border border-white/10 bg-slate-900 p-6">
-                <h3 className="text-lg font-semibold text-white">Delete All Drafts?</h3>
-                <p className="mt-2 text-sm text-slate-400">
-                  This will permanently delete {cardsQuery.data.length} draft card{cardsQuery.data.length === 1 ? '' : 's'}. This action cannot be undone.
-                </p>
-                <div className="mt-6 flex justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setShowBulkDeleteConfirm(false)}
-                    className="rounded-full border border-white/20 px-4 py-2 text-sm text-white hover:border-white/40"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => bulkDeleteMutation.mutate(cardsQuery.data.map((c) => c.id))}
-                    disabled={bulkDeleteMutation.isPending}
-                    className="rounded-full bg-rose-500 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-50"
-                  >
-                    {bulkDeleteMutation.isPending ? 'Deleting...' : 'Delete All'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Single Delete Confirmation Dialog */}
-          {pendingDeleteId && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-              <div className="mx-4 w-full max-w-md rounded-2xl border border-white/10 bg-slate-900 p-6">
-                <h3 className="text-lg font-semibold text-white">Delete Draft?</h3>
-                <p className="mt-2 text-sm text-slate-400">
-                  This will permanently delete this draft card. This action cannot be undone.
-                </p>
-                <div className="mt-6 flex justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setPendingDeleteId(null)}
-                    className="rounded-full border border-white/20 px-4 py-2 text-sm text-white hover:border-white/40"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => deleteMutation.mutate(pendingDeleteId)}
-                    disabled={deleteMutation.isPending}
-                    className="rounded-full bg-rose-500 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-50"
-                  >
-                    {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {renderMutation.isError && (
-            <p className="mt-2 text-xs text-rose-400">
-              {renderMutation.error instanceof Error ? renderMutation.error.message : 'Render failed'}
-            </p>
-          )}
-          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {cardsQuery.data?.map((card) => {
-              const defaultTemplateId = resolveTemplateId(
-                { cardType: card.cardType },
-                activeConfig ?? undefined
-              )
-              const defaultTemplateLabel = templateLabelFor(defaultTemplateId)
-              const hasUnknownTemplate =
-                Boolean(card.templateId) &&
-                !templateOptions.some((template) => template.id === card.templateId)
-              const isRendering = renderingCardId === card.id
-
-              return (
-                <div key={card.id} className="rounded-2xl border border-white/10 bg-slate-950/60 p-3 text-xs text-slate-300">
-                  <div className="space-y-1">
-                    <div className="text-sm text-white">{card.cardType}</div>
-                    <div>{card.id}</div>
-                    <div>{cardDisplayName(card)}</div>
-                  </div>
-
-                  <label className="mt-3 block text-[11px] uppercase tracking-wide text-slate-400">
-                    Template Override
-                    <select
-                      value={card.templateId ?? ''}
-                      onChange={(event) =>
-                        templateMutation.mutate({
-                          id: card.id,
-                          templateId: event.target.value ? event.target.value : null,
-                        })
-                      }
-                      className="mt-2 w-full rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-xs text-white"
-                    >
-                      <option value="">{`Default (${defaultTemplateLabel})`}</option>
-                      {hasUnknownTemplate ? (
-                        <option value={card.templateId ?? ''}>{`Custom (${card.templateId})`}</option>
-                      ) : null}
-                      {templateOptions.map((template) => (
-                        <option key={template.id} value={template.id}>
-                          {template.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  {card.renderKey ? (
-                    <img
-                      src={assetUrlForKey(card.renderKey)}
-                      alt="Rendered card"
-                      className="mt-3 w-full rounded-xl"
-                    />
-                  ) : (
-                    <div className="mt-3 flex aspect-[825/1125] items-center justify-center rounded-xl border border-dashed border-white/10 text-[11px] text-slate-500">
-                      No render
-                    </div>
-                  )}
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {card.status !== 'draft' ? (
-                      <button
-                        type="button"
-                        onClick={() => renderMutation.mutate(card)}
-                        disabled={isRendering || renderMutation.isPending}
-                        className="rounded-full border border-emerald-500/40 px-3 py-1 text-[11px] text-emerald-300 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {isRendering ? 'Rendering...' : 'Render'}
-                      </button>
-                    ) : null}
-                    {card.status === 'draft' ? (
-                      <button
-                        type="button"
-                        onClick={() => setPendingDeleteId(card.id)}
-                        className="rounded-full border border-rose-500/40 px-3 py-1 text-[11px] text-rose-300 hover:border-rose-500/60"
-                      >
-                        Delete Draft
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </section>
       </div>
     </div>
   )

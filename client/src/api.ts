@@ -18,9 +18,9 @@ export const media = (path: string) => `${MEDIA_BASE}${path}`
 export const writeHeaders: HeadersInit = {}
 
 export const publicPathForKey = (key: string) => {
-  if (key.startsWith('renders/')) return `${BASE_PATH}/r/${key.slice('renders/'.length)}`
-  if (key.startsWith('config/')) return `${BASE_PATH}/c/${key.slice('config/'.length)}`
-  return `${BASE_PATH}/${key}`
+  if (key.startsWith('renders/')) return `/r/${key.slice('renders/'.length)}`
+  if (key.startsWith('config/')) return `/c/${key.slice('config/'.length)}`
+  return `/${key}`
 }
 
 export const assetUrlForKey = (key: string) => media(publicPathForKey(key))
