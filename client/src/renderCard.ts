@@ -763,9 +763,10 @@ async function renderCardFrame(
   // 3. Draw the frame overlay
   drawFrame(ctx)
 
-  // 4. Draw team logo
+  // 4. Draw team logo (or override logo for certain card types like media/official)
   const team = getTeamInfo(card, config)
-  const logoKey = team?.logoKey || config.branding.tournamentLogoKey
+  const cardTypeConfig = config.cardTypes.find((ct) => ct.type === card.cardType)
+  const logoKey = cardTypeConfig?.logoOverrideKey || team?.logoKey || config.branding.tournamentLogoKey
   const logoImg = await loadImageSafe(logoKey ? resolveAssetUrl(logoKey) : null)
   if (logoImg) {
     const { x, y, maxWidth, maxHeight } = USQC26_LAYOUT.teamLogo

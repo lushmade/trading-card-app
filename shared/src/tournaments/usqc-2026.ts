@@ -156,6 +156,7 @@ export const USQC_2026_CONFIG: TournamentConfig = {
       "label": "Tournament Staff",
       "showTeamField": false,
       "showJerseyNumber": false,
+      "logoOverrideKey": "config/tournaments/usqc-2026/logos/tournament.png",
       "positions": [
         "Gameplay",
         "Tournament Staff",
@@ -168,6 +169,7 @@ export const USQC_2026_CONFIG: TournamentConfig = {
       "label": "Rare Card",
       "showTeamField": false,
       "showJerseyNumber": false,
+      "logoOverrideKey": "config/tournaments/usqc-2026/logos/tournament.png",
       "positions": []
     },
     {
