@@ -113,13 +113,13 @@ export const USQC_2026_CONFIG: TournamentConfig = {
       "enabled": true,
       "label": "Team Staff",
       "showTeamField": true,
-      "showJerseyNumber": false,
+      "showJerseyNumber": true,
       "positions": [
         "Captain",
         "Coach",
         "Manager",
         "Mascot",
-        "Team Staff"
+        "Staff"
       ]
     },
     {

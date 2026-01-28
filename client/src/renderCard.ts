@@ -218,7 +218,7 @@ function drawEventBadge(ctx: CanvasRenderingContext2D, text: string) {
   ctx.restore()
 }
 
-function drawPositionNumber(ctx: CanvasRenderingContext2D, position: string, number: string) {
+function drawPositionNumber(ctx: CanvasRenderingContext2D, position: string, number?: string) {
   const {
     centerX,
     topY,
@@ -248,19 +248,22 @@ function drawPositionNumber(ctx: CanvasRenderingContext2D, position: string, num
   ctx.fillStyle = USQC26_COLORS.primary
   ctx.fillText(position.toUpperCase(), centerX, topY)
 
-  // Calculate number Y position (below position text)
-  const numberY = topY + positionFontSize
+  // Only draw jersey number if provided
+  if (number) {
+    // Calculate number Y position (below position text)
+    const numberY = topY + positionFontSize
 
-  // Jersey number - #FFFFFF 67% opaque fill with #1B4278 stroke
-  ctx.font = `500 ${numberFontSize}px ${FONT_AMIFER}`
-  ctx.letterSpacing = `${numberLetterSpacing}px`
-  // Draw stroke first (underneath)
-  ctx.strokeStyle = USQC26_COLORS.primary
-  ctx.lineWidth = numberStrokeWidth
-  ctx.strokeText(number, centerX + numberXOffset, numberY)
-  // Then fill with white 67% opacity
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.67)'
-  ctx.fillText(number, centerX + numberXOffset, numberY)
+    // Jersey number - #FFFFFF 67% opaque fill with #1B4278 stroke
+    ctx.font = `500 ${numberFontSize}px ${FONT_AMIFER}`
+    ctx.letterSpacing = `${numberLetterSpacing}px`
+    // Draw stroke first (underneath)
+    ctx.strokeStyle = USQC26_COLORS.primary
+    ctx.lineWidth = numberStrokeWidth
+    ctx.strokeText(number, centerX + numberXOffset, numberY)
+    // Then fill with white 67% opacity
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.67)'
+    ctx.fillText(number, centerX + numberXOffset, numberY)
+  }
 
   ctx.restore()
 }
@@ -820,12 +823,13 @@ async function renderCardFrame(
     drawBottomBar(ctx, photographer, bottomText, 'uncommon', cameraImg)
 
   } else {
-    // Standard player card
+    // Standard player card (includes team-staff, media, official, tournament-staff)
     // Note: Name boxes are drawn earlier (before frame) so they appear underneath
 
-    // Position and number
-    if ('position' in card && card.position && 'jerseyNumber' in card && card.jerseyNumber) {
-      drawPositionNumber(ctx, card.position, card.jerseyNumber)
+    // Position and number (jersey number is optional for some card types like team-staff)
+    if ('position' in card && card.position) {
+      const jerseyNumber = 'jerseyNumber' in card ? card.jerseyNumber : undefined
+      drawPositionNumber(ctx, card.position, jerseyNumber)
     }
 
     // Bottom bar
