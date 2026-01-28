@@ -1464,26 +1464,32 @@ function App() {
       {/* Mobile Progress Indicator */}
       {form.tournamentId && (
         <div className="sticky top-[57px] z-20 md:hidden bg-[var(--bg-surface)] border-b border-[var(--border-light)]">
-          <div className="flex items-center justify-between px-4 py-3">
+          <div className="flex items-center justify-between px-2 py-3">
             {STEPS.map((step, index) => (
               <button
                 key={step.id}
                 onClick={() => handleStepClick(index)}
-                className={`flex h-9 w-9 items-center justify-center rounded-full text-sm font-medium transition
+                className={`flex flex-col items-center gap-1 px-1 transition
+                  ${index < currentStep
+                    ? 'text-[var(--accent-primary)]'
+                    : index === currentStep
+                      ? 'text-[var(--accent-secondary)]'
+                      : 'text-[var(--text-muted)]'
+                  }`}
+                aria-label={step.label}
+              >
+                <span className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-medium
                   ${index < currentStep
                     ? 'bg-[var(--accent-primary)] text-white'
                     : index === currentStep
                       ? 'bg-[var(--accent-secondary)] text-white'
-                      : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
-                  }`}
-                aria-label={step.label}
-              >
-                {index < currentStep ? '✓' : index + 1}
+                      : 'bg-[var(--bg-tertiary)]'
+                  }`}>
+                  {index < currentStep ? '✓' : index + 1}
+                </span>
+                <span className="text-[10px] font-medium">{step.label}</span>
               </button>
             ))}
-          </div>
-          <div className="px-4 py-2 text-center text-sm font-medium text-[var(--text-secondary)] border-t border-[var(--border-light)]">
-            {STEPS[currentStep].label}
           </div>
         </div>
       )}
@@ -1535,7 +1541,7 @@ function App() {
           /* Main Studio Layout */
           <div className="grid gap-8 lg:grid-cols-[400px_1fr]">
             {/* Canvas Area */}
-            <div className="space-y-6 lg:order-2 order-1">
+            <div className="space-y-6 lg:order-2 order-2">
               {/* Toolbar */}
               <div className="studio-panel flex items-center justify-between px-4 py-3">
                 <div className="flex items-center gap-2">
@@ -1742,7 +1748,7 @@ function App() {
             </div>
 
             {/* Sidebar - Form First */}
-            <div className="studio-panel overflow-hidden lg:order-1 order-2">
+            <div className="studio-panel overflow-hidden lg:order-1 order-1">
               {/* Card Type Section */}
               <div
                 ref={(el) => { sectionRefs.current.type = el }}
