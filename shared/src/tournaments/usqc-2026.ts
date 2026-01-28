@@ -174,7 +174,7 @@ export const USQC_2026_CONFIG: TournamentConfig = {
     },
     {
       "type": "super-rare",
-      "enabled": true,
+      "enabled": false,
       "label": "Super Rare Card",
       "showTeamField": false,
       "showJerseyNumber": true,
