@@ -2054,9 +2054,31 @@ app.get('/admin/cards', async (c) => {
     ? JSON.parse(Buffer.from(cursorParam, 'base64').toString('utf-8'))
     : undefined
 
+  // Count total matching items on first page request (no cursor)
+  const countQuery = !cursorParam
+    ? (tournamentId
+        ? ddb.send(new QueryCommand({
+            TableName: Resource.Cards.name,
+            IndexName: 'byTournamentStatus',
+            KeyConditionExpression: '#tournamentId = :tournamentId AND begins_with(#statusCreatedAt, :statusPrefix)',
+            ExpressionAttributeNames: { '#tournamentId': 'tournamentId', '#statusCreatedAt': 'statusCreatedAt' },
+            ExpressionAttributeValues: { ':tournamentId': tournamentId, ':statusPrefix': `${statusParam}#` },
+            Select: 'COUNT',
+          }))
+        : ddb.send(new QueryCommand({
+            TableName: Resource.Cards.name,
+            IndexName: 'byStatus',
+            KeyConditionExpression: '#status = :status',
+            ExpressionAttributeNames: { '#status': 'status' },
+            ExpressionAttributeValues: { ':status': statusParam },
+            Select: 'COUNT',
+          }))
+      )
+    : undefined
+
   if (tournamentId) {
-    const result = await ddb.send(
-      new QueryCommand({
+    const [result, countResult] = await Promise.all([
+      ddb.send(new QueryCommand({
         TableName: Resource.Cards.name,
         IndexName: 'byTournamentStatus',
         KeyConditionExpression:
@@ -2072,16 +2094,17 @@ app.get('/admin/cards', async (c) => {
         ScanIndexForward: false,
         Limit: limit,
         ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
-      })
-    )
+      })),
+      countQuery ?? Promise.resolve(undefined),
+    ])
     const nextCursor = result.LastEvaluatedKey
       ? Buffer.from(JSON.stringify(result.LastEvaluatedKey)).toString('base64')
       : undefined
-    return c.json({ items: result.Items ?? [], nextCursor })
+    return c.json({ items: result.Items ?? [], nextCursor, ...(countResult && { total: countResult.Count }) })
   }
 
-  const result = await ddb.send(
-    new QueryCommand({
+  const [result, countResult] = await Promise.all([
+    ddb.send(new QueryCommand({
       TableName: Resource.Cards.name,
       IndexName: 'byStatus',
       KeyConditionExpression: '#status = :status',
@@ -2094,12 +2117,13 @@ app.get('/admin/cards', async (c) => {
       ScanIndexForward: false,
       Limit: limit,
       ...(exclusiveStartKey && { ExclusiveStartKey: exclusiveStartKey }),
-    })
-  )
+    })),
+    countQuery ?? Promise.resolve(undefined),
+  ])
   const nextCursor = result.LastEvaluatedKey
     ? Buffer.from(JSON.stringify(result.LastEvaluatedKey)).toString('base64')
     : undefined
-  return c.json({ items: result.Items ?? [], nextCursor })
+  return c.json({ items: result.Items ?? [], nextCursor, ...(countResult && { total: countResult.Count }) })
 })
 
 app.patch('/admin/cards/:id', async (c) => {

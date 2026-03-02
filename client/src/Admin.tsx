@@ -251,13 +251,14 @@ export default function Admin() {
       if (pageParam) params.set('cursor', pageParam)
       const res = await fetch(api(`/admin/cards?${params}`), { headers: adminHeaders })
       if (!res.ok) throw new Error('Request failed')
-      return res.json() as Promise<{ items: Card[]; nextCursor?: string }>
+      return res.json() as Promise<{ items: Card[]; nextCursor?: string; total?: number }>
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
     enabled: !authEnabled || Boolean(adminPassword),
   })
   const allCards = cardsQuery.data?.pages.flatMap((p) => p.items)
+  const totalCards = cardsQuery.data?.pages[0]?.total
 
   const saveConfigMutation = useMutation({
     mutationFn: async () => {
@@ -740,7 +741,7 @@ export default function Admin() {
       <div className="border-b border-[var(--border-light)] bg-[var(--bg-surface)]">
         <div className="mx-auto flex max-w-6xl gap-1 px-6">
           {[
-            { id: 'cards' as const, label: 'Cards', count: allCards?.length },
+            { id: 'cards' as const, label: 'Cards', count: totalCards ?? allCards?.length },
             { id: 'config' as const, label: 'Tournament Config' },
             { id: 'assets' as const, label: 'Assets' },
           ].map((tab) => (
@@ -917,7 +918,7 @@ export default function Admin() {
               </div>
             ) : (
               <>
-              <p className="text-xs text-[var(--text-secondary)] mb-2">Showing {allCards?.length ?? 0} card{allCards?.length === 1 ? '' : 's'}</p>
+              <p className="text-xs text-[var(--text-secondary)] mb-2">Showing {allCards?.length ?? 0}{totalCards != null ? ` of ${totalCards}` : ''} card{(totalCards ?? allCards?.length) === 1 ? '' : 's'}</p>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {allCards?.map((card) => {
                   const defaultTemplateId = resolveTemplateId(
