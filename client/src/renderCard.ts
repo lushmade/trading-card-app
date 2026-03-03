@@ -18,6 +18,8 @@ import {
 
 // Camera icon for bottom bar
 import cameraIconUrl from './assets/icons/camera.png'
+// Super rare symbol (two gold stars)
+import superRareSymbolUrl from './assets/icons/super-rare-symbol.png'
 
 const BASE_THEME: TemplateTheme = {
   gradientStart: 'rgba(15, 23, 42, 0)',
@@ -677,10 +679,11 @@ function drawBottomBarSuperRare(
   photographer: string,
   rightText: string,
   layout: Usqc26LayoutV1,
-  cameraImg?: HTMLImageElement | null
+  cameraImg?: HTMLImageElement | null,
+  superRareSymbolImg?: HTMLImageElement | null
 ) {
   const { bottomBar, superRare, typography } = layout
-  const { cameraIcon, photographerX, rarityX, raritySize, rarityGap, teamNameX, fontSize, letterSpacing } = bottomBar
+  const { cameraIcon, photographerX, teamNameX, fontSize, letterSpacing } = bottomBar
   // Use bottomBarOffset if provided, otherwise use default y
   const barY = superRare.bottomBarOffset ? (CARD_HEIGHT - superRare.bottomBarOffset) : bottomBar.y
   const textY = barY + bottomBar.textYOffset
@@ -707,12 +710,14 @@ function drawBottomBarSuperRare(
   ctx.letterSpacing = `${letterSpacing.photographer}px`
   ctx.fillText(photographer.toUpperCase(), photographerX, textY)
 
-  // Rarity indicator - two stars for super-rare (white)
-  ctx.fillStyle = '#ffffff'
-  drawStar(ctx, rarityX + raritySize / 2, barY + 13, raritySize / 2, 5)
-  ctx.fill()
-  drawStar(ctx, rarityX + raritySize / 2 + raritySize + rarityGap, barY + 13, raritySize / 2, 5)
-  ctx.fill()
+  // Super rare symbol - centered horizontally
+  if (superRareSymbolImg) {
+    const symbolWidth = superRareSymbolImg.naturalWidth
+    const symbolHeight = superRareSymbolImg.naturalHeight
+    const symbolX = (CARD_WIDTH - symbolWidth) / 2
+    const symbolY = barY + (bottomBar.textYOffset - symbolHeight / 2) - 12
+    ctx.drawImage(superRareSymbolImg, symbolX, symbolY, symbolWidth, symbolHeight)
+  }
 
   // Right text (white, right-aligned)
   ctx.textAlign = 'right'
@@ -1262,12 +1267,16 @@ async function renderCardFrame(
   crop: CropRect
 ) {
   const { card, config, imageUrl, resolveAssetUrl } = input
-  const { templateSnapshot } = resolveTemplateSnapshot({
+  const { templateId: effectiveTemplateId, templateSnapshot } = resolveTemplateSnapshot({
     card,
     config,
     templateId: input.templateId,
   })
   const layout = asUsqc26Layout(templateSnapshot.layout)
+
+  // Check if we should render as super-rare (either card type is super-rare OR template is super-rare)
+  const eligibleForSuperRare = ['player', 'team-staff', 'media', 'official', 'tournament-staff', 'super-rare'].includes(card.cardType)
+  const renderAsSuperRare = card.cardType === 'super-rare' || (eligibleForSuperRare && effectiveTemplateId === 'super-rare')
   if (!layout) {
     // Render error state for missing or invalid layout
     ctx.fillStyle = '#f87171'
@@ -1387,14 +1396,14 @@ async function renderCardFrame(
     // Standard USQC-style rendering path
 
     // 3. Draw content boxes BEFORE the frame (so frame covers them)
-    const isStandardPlayer = card.cardType !== 'rare' && card.cardType !== 'super-rare' && card.cardType !== 'national-team'
+    const isStandardPlayer = card.cardType !== 'rare' && !renderAsSuperRare && card.cardType !== 'national-team'
     if (isStandardPlayer) {
       const firstName = 'firstName' in card ? card.firstName ?? '' : ''
       const lastName = 'lastName' in card ? card.lastName ?? '' : ''
       if (firstName || lastName) {
         drawAngledNameBoxes(ctx, firstName, lastName, layout)
       }
-    } else if (card.cardType === 'rare') {
+    } else if (card.cardType === 'rare' && !renderAsSuperRare) {
       // Rare card: draw title/caption boxes before frame
       const title = 'title' in card ? card.title ?? 'Rare Card' : 'Rare Card'
       const caption = 'caption' in card ? card.caption ?? '' : ''
@@ -1403,7 +1412,7 @@ async function renderCardFrame(
     // Note: super-rare content is drawn later, after overlay check
 
     // 4. Draw the frame overlay (skip for super-rare - full bleed)
-    if (card.cardType !== 'super-rare') {
+    if (!renderAsSuperRare) {
       drawFrame(ctx, layout)
     }
 
@@ -1436,32 +1445,37 @@ async function renderCardFrame(
     const cameraImg = await loadImageSafe(cameraIconUrl)
 
     // 8. Draw card-type-specific content
-    if (card.cardType === 'rare') {
-      // Rare card: title/caption already drawn before frame
-      // Just draw bottom bar
-      const photographer = card.photographer ?? ''
-      drawBottomBar(ctx, photographer, 'RARE CARD', layout, 'rare', cameraImg)
-
-    } else if (card.cardType === 'super-rare') {
+    if (renderAsSuperRare) {
       // Super rare: full bleed (no frame), centered name style with Cinema Script
+      // Can be triggered by cardType === 'super-rare' OR templateId === 'super-rare'
       // NOTE: Frame is skipped for super-rare - drawFrame is not called
+      // NOTE: Position/number NOT shown in upper right for super-rare (only event badge)
 
       const firstName = 'firstName' in card ? card.firstName ?? '' : ''
       const lastName = 'lastName' in card ? card.lastName ?? '' : ''
       drawSuperRareName(ctx, firstName, lastName, layout)
 
-      // Position and number only shown if they exist (typically for player/team-staff super-rares)
-      const position = 'position' in card ? card.position : undefined
-      const jerseyNumber = 'jerseyNumber' in card ? card.jerseyNumber : undefined
-      if (position && jerseyNumber) {
-        drawPositionNumber(ctx, position, jerseyNumber, layout)
-      }
+      // Load super rare symbol
+      const superRareSymbolImg = await loadImageSafe(superRareSymbolUrl)
 
       // White-themed bottom bar for super-rare
       const photographer = card.photographer ?? ''
-      // Right text: team name if available, otherwise position (for media/official/etc)
-      const rightText = team?.name ?? position ?? ''
-      drawBottomBarSuperRare(ctx, photographer, rightText, layout, cameraImg)
+      const position = 'position' in card ? card.position : undefined
+      const jerseyNumber = 'jerseyNumber' in card ? card.jerseyNumber : undefined
+      // Right text: "#[number] [position]" for player/team-staff, otherwise position
+      let rightText = ''
+      if (jerseyNumber && position) {
+        rightText = `#${jerseyNumber} ${position}`
+      } else if (position) {
+        rightText = position
+      }
+      drawBottomBarSuperRare(ctx, photographer, rightText, layout, cameraImg, superRareSymbolImg)
+
+    } else if (card.cardType === 'rare') {
+      // Rare card: title/caption already drawn before frame
+      // Just draw bottom bar
+      const photographer = card.photographer ?? ''
+      drawBottomBar(ctx, photographer, 'RARE CARD', layout, 'rare', cameraImg)
 
     } else if (card.cardType === 'national-team') {
       // National team (uncommon): name at top

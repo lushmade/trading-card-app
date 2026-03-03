@@ -67,13 +67,13 @@ const buildSampleCard = (config: TournamentConfig, cardType: CardType, templateI
       createdAt: now,
       updatedAt: now,
       templateId,
-      firstName: 'Jordan',
-      lastName: 'Lopez',
+      firstName: 'Bao',
+      lastName: 'Hoang',
       position: 'Beater',
       jerseyNumber: '12',
       teamId: dragonWolves?.id,
       teamName: dragonWolves?.name ?? 'Dragon Wolves',
-      photographer: 'Sample Photographer',
+      photographer: 'Photographer',
       photo: { crop: { x: 0, y: 0, w: 1, h: 1, rotateDeg: 0 } },
     }
   }

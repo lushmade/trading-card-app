@@ -229,13 +229,17 @@ export default function Admin() {
   const activeConfig = configParsed ?? configQuery.data ?? null
 
   const templateOptions = useMemo(() => {
-    if (activeConfig?.templates && activeConfig.templates.length > 0) {
-      return activeConfig.templates
+    const baseTemplates = activeConfig?.templates && activeConfig.templates.length > 0
+      ? activeConfig.templates
+      : [
+          { id: 'classic', label: 'Classic' },
+          { id: 'noir', label: 'Noir' },
+        ]
+    // Always include super-rare as an option for rendering player/staff cards as super-rare
+    if (!baseTemplates.some(t => t.id === 'super-rare')) {
+      return [...baseTemplates, { id: 'super-rare', label: 'Super Rare' }]
     }
-    return [
-      { id: 'classic', label: 'Classic' },
-      { id: 'noir', label: 'Noir' },
-    ]
+    return baseTemplates
   }, [activeConfig])
 
   const templateLabelFor = (templateId: string) =>
