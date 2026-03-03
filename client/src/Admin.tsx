@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import JSZip from 'jszip'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { resolveTemplateId, type Card, type TournamentConfig, type TournamentListEntry } from 'shared'
+import { resolveTemplateId, type Card, type CardType, type ReviewStatus, type TournamentConfig, type TournamentListEntry } from 'shared'
 import { api, assetUrlForKey } from './api'
 import { renderCard, resolveTemplateSnapshot } from './renderCard'
 import TemplateEditor from './components/TemplateEditor'
@@ -30,6 +30,27 @@ type PresignResponse = {
 }
 
 const MAX_UPLOAD_RETRIES = 1
+
+const REVIEW_STATUS_OPTIONS: { value: ReviewStatus; label: string }[] = [
+  { value: 'new', label: 'New' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'rejected', label: 'Rejected' },
+  { value: 'duplicate', label: 'Duplicate' },
+  { value: 'need-sr', label: 'Need SR' },
+  { value: 'fix-required', label: 'Fix Required' },
+  { value: 'done', label: 'Done' },
+]
+
+const CARD_TYPE_OPTIONS: { value: CardType; label: string }[] = [
+  { value: 'player', label: 'Player' },
+  { value: 'team-staff', label: 'Team Staff' },
+  { value: 'media', label: 'Media' },
+  { value: 'official', label: 'Official' },
+  { value: 'tournament-staff', label: 'Tournament Staff' },
+  { value: 'rare', label: 'Rare' },
+  { value: 'super-rare', label: 'Super Rare' },
+  { value: 'national-team', label: 'National Team' },
+]
 
 const cardDisplayName = (card: Card) => {
   if (card.cardType === 'rare') {
@@ -106,7 +127,9 @@ export default function Admin() {
   const [adminPassword, setAdminPassword] = useState(() => sessionStorage.getItem('adminPassword') ?? '')
   const [activeTournamentId, setActiveTournamentId] = useState('')
   const [configDraft, setConfigDraft] = useState('')
-  const [statusFilter, setStatusFilter] = useState('submitted')
+  const [statusFilter, setStatusFilter] = useState('rendered')
+  const [reviewStatusFilter, setReviewStatusFilter] = useState<ReviewStatus | 'all'>('all')
+  const [cardTypeFilter, setCardTypeFilter] = useState<CardType | 'all'>('all')
   const [logosZipFile, setLogosZipFile] = useState<File | null>(null)
   const [logosZipResult, setLogosZipResult] = useState<LogosZipResult | null>(null)
   const [bundleFile, setBundleFile] = useState<File | null>(null)
@@ -259,6 +282,20 @@ export default function Admin() {
   })
   const allCards = cardsQuery.data?.pages.flatMap((p) => p.items)
   const totalCards = cardsQuery.data?.pages[0]?.total
+
+  // Filter cards by review status and card type (client-side filtering)
+  const filteredCards = useMemo(() => {
+    if (!allCards) return []
+    return allCards.filter((card) => {
+      if (reviewStatusFilter !== 'all' && (card.reviewStatus ?? 'new') !== reviewStatusFilter) {
+        return false
+      }
+      if (cardTypeFilter !== 'all' && card.cardType !== cardTypeFilter) {
+        return false
+      }
+      return true
+    })
+  }, [allCards, reviewStatusFilter, cardTypeFilter])
 
   const saveConfigMutation = useMutation({
     mutationFn: async () => {
@@ -829,6 +866,30 @@ export default function Admin() {
                   <option value="submitted">Submitted</option>
                   <option value="rendered">Rendered</option>
                 </select>
+                {statusFilter === 'rendered' && (
+                  <>
+                    <select
+                      value={cardTypeFilter}
+                      onChange={(event) => setCardTypeFilter(event.target.value as CardType | 'all')}
+                      className="rounded-lg border border-[var(--border-light)] bg-[var(--bg-surface)] px-3 py-1.5 text-sm text-[var(--text-primary)]"
+                    >
+                      <option value="all">All Card Types</option>
+                      {CARD_TYPE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={reviewStatusFilter}
+                      onChange={(event) => setReviewStatusFilter(event.target.value as ReviewStatus | 'all')}
+                      className="rounded-lg border border-[var(--border-light)] bg-[var(--bg-surface)] px-3 py-1.5 text-sm text-[var(--text-primary)]"
+                    >
+                      <option value="all">All Review Status</option>
+                      {REVIEW_STATUS_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </>
+                )}
                 {statusFilter === 'draft' && allCards && allCards.length > 0 && (
                   <button
                     type="button"
@@ -918,9 +979,13 @@ export default function Admin() {
               </div>
             ) : (
               <>
-              <p className="text-xs text-[var(--text-secondary)] mb-2">Showing {allCards?.length ?? 0}{totalCards != null ? ` of ${totalCards}` : ''} card{(totalCards ?? allCards?.length) === 1 ? '' : 's'}</p>
+              <p className="text-xs text-[var(--text-secondary)] mb-2">
+                Showing {statusFilter === 'rendered' ? filteredCards.length : (allCards?.length ?? 0)}
+                {statusFilter === 'rendered' && (reviewStatusFilter !== 'all' || cardTypeFilter !== 'all') ? ` (filtered)` : ''}
+                {totalCards != null ? ` of ${totalCards}` : ''} card{(totalCards ?? allCards?.length) === 1 ? '' : 's'}
+              </p>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {allCards?.map((card) => {
+                {(statusFilter === 'rendered' ? filteredCards : allCards)?.map((card) => {
                   const defaultTemplateId = resolveTemplateId(
                     { cardType: card.cardType },
                     activeConfig ?? undefined
@@ -954,30 +1019,56 @@ export default function Admin() {
                         </div>
                       </div>
 
-                      <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
-                        Template
-                      </label>
-                      <select
-                        value={card.templateId ?? ''}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(event) =>
-                          templateMutation.mutate({
-                            id: card.id,
-                            templateId: event.target.value ? event.target.value : null,
-                          })
-                        }
-                        className="w-full rounded-lg border border-[var(--border-light)] bg-[var(--bg-surface)] px-2 py-1.5 text-sm text-[var(--text-primary)]"
-                      >
-                        <option value="">{`Default (${defaultTemplateLabel})`}</option>
-                        {hasUnknownTemplate ? (
-                          <option value={card.templateId ?? ''}>{`Custom (${card.templateId})`}</option>
-                        ) : null}
-                        {templateOptions.map((template) => (
-                          <option key={template.id} value={template.id}>
-                            {template.label}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                            Template
+                          </label>
+                          <select
+                            value={card.templateId ?? ''}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(event) =>
+                              templateMutation.mutate({
+                                id: card.id,
+                                templateId: event.target.value ? event.target.value : null,
+                              })
+                            }
+                            className="w-full rounded-lg border border-[var(--border-light)] bg-[var(--bg-surface)] px-2 py-1.5 text-sm text-[var(--text-primary)]"
+                          >
+                            <option value="">{`Default (${defaultTemplateLabel})`}</option>
+                            {hasUnknownTemplate ? (
+                              <option value={card.templateId ?? ''}>{`Custom (${card.templateId})`}</option>
+                            ) : null}
+                            {templateOptions.map((template) => (
+                              <option key={template.id} value={template.id}>
+                                {template.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1">
+                            Review Status
+                          </label>
+                          <select
+                            value={card.reviewStatus ?? 'new'}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(event) =>
+                              updateCardMutation.mutate({
+                                id: card.id,
+                                fields: { reviewStatus: event.target.value },
+                              })
+                            }
+                            className="w-full rounded-lg border border-[var(--border-light)] bg-[var(--bg-surface)] px-2 py-1.5 text-sm text-[var(--text-primary)]"
+                          >
+                            {REVIEW_STATUS_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
 
                       {card.renderKey ? (
                         <img

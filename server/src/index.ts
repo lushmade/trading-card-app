@@ -2145,6 +2145,18 @@ app.patch('/admin/cards/:id', async (c) => {
     return badRequest(c, error)
   }
 
+  // Handle reviewStatus (admin-only field)
+  const validReviewStatuses = ['new', 'approved', 'rejected', 'duplicate', 'need-sr', 'fix-required', 'done']
+  if (body.reviewStatus !== undefined) {
+    if (body.reviewStatus === null) {
+      pushRemove(draft, 'reviewStatus')
+    } else if (typeof body.reviewStatus === 'string' && validReviewStatuses.includes(body.reviewStatus)) {
+      pushSet(draft, 'reviewStatus', body.reviewStatus)
+    } else {
+      return badRequest(c, `reviewStatus must be one of: ${validReviewStatuses.join(', ')}`)
+    }
+  }
+
   pushSet(draft, 'updatedAt', nowIso())
 
   const { updateExpression, names, values } = buildDynamoUpdateExpression(draft)

@@ -17,7 +17,7 @@ const sentryPlugin = sentryAuthToken
 const basePath = process.env.VITE_BASE_PATH || '/';
 
 // CloudFront Router URL for proxying API/media in dev mode
-const routerUrl = 'https://dskbjnhrm09v7.cloudfront.net';
+const routerUrl = 'https://dn5m00m19yfre.cloudfront.net';
 
 export default defineConfig({
 	base: basePath,
